@@ -169,9 +169,28 @@ class Hit:
     blanket: bool
 
 
-def applies(marker: Marker, path: Path, line: str) -> bool:
+# In a boundary parser (--any-type-allow), the raw input *parameter* may be untyped. Only that
+# span is removed before matching, so a return type, a second parameter or a cast on the same
+# line is still counted. A line holding nothing but a wrapped parameter is exempt.
+UNTYPED = r"(unknown|any|Any|interface\{\}|mixed|dynamic|T\.untyped)\b"
+UNTYPED_PARAM = r"[(,]\s*\*?\w+\??\s*(:\s*|\s+)" + UNTYPED
+SIGNATURE = r"\b(def|function|func|fn)\b|=>"
+BARE_PARAM = r"^\s*\*?\w+\??\s*(:\s*|\s+)" + UNTYPED + r"\s*,?\s*$"
+
+
+def strip_boundary_param(line: str) -> str:
+    if re.match(BARE_PARAM, line):
+        return ""
+    if re.search(SIGNATURE, line):
+        return re.sub(UNTYPED_PARAM, " (", line, count=1)
+    return line
+
+
+def applies(marker: Marker, path: Path, line: str, boundary: bool = False) -> bool:
     if marker.exts is not None and path.suffix not in marker.exts:
         return False
+    if boundary and marker.category == "any-type":
+        line = strip_boundary_param(line)
     if marker.code_only and line.lstrip().startswith(COMMENT_START):
         return False
     if marker.unless and re.search(marker.unless, line):
@@ -181,29 +200,15 @@ def applies(marker: Marker, path: Path, line: str) -> bool:
     return re.search(marker.pattern, line) is not None
 
 
-def scan(path: Path) -> list[Hit]:
+def scan(path: Path, boundary_globs: list[str] | None = None) -> list[Hit]:
+    boundary = any(fnmatch.fnmatch(path.as_posix(), g) for g in boundary_globs or [])
     hits = []
     for number, line in enumerate(read_text(path).splitlines(), start=1):
         for marker in MARKERS:
-            if applies(marker, path, line):
+            if applies(marker, path, line, boundary):
                 blanket = bool(marker.blanket and re.search(marker.blanket, line))
                 hits.append(Hit(marker, path, number, line.strip()[:120], blanket))
     return hits
-
-
-# A function parameter typed as untyped input: `(raw: unknown)`, `(raw: Any)`, `func Parse(raw any)`.
-UNTYPED_PARAM = r"[(,]\s*\*?\w+\??\s*(:\s*|\s+)(unknown|any|Any|interface\{\}|mixed|dynamic|T\.untyped)\b"
-SIGNATURE = r"\b(def|function|func|fn)\b|=>"
-CAST = r"\bas\s+(any|unknown)\b|\bcast\(|<(any|unknown)>"
-
-
-def boundary_any(hit: Hit, globs: list[str]) -> bool:
-    """In a boundary parser named by --any-type-allow, the raw input parameter may be untyped.
-    Only that is exempt: casts, return types and variables in the same file still count."""
-    if hit.marker.category != "any-type" or not any(fnmatch.fnmatch(hit.path.as_posix(), g) for g in globs):
-        return False
-    line = hit.text
-    return bool(re.search(SIGNATURE, line) and re.search(UNTYPED_PARAM, line) and not re.search(CAST, line))
 
 
 def counts(hits: list[Hit]) -> dict[str, int]:
@@ -275,7 +280,7 @@ def main() -> int:
     split_categories(args)
     this_file = Path(__file__).resolve()
     files = [f for f in list_files(args.paths, SOURCE_EXTS, args.exclude) if f.resolve() != this_file]
-    hits = [h for f in files for h in scan(f) if not boundary_any(h, args.any_type_allow)]
+    hits = [h for f in files for h in scan(f, args.any_type_allow)]
     current = counts(hits)
     if args.write_baseline:
         Path(args.write_baseline).parent.mkdir(parents=True, exist_ok=True)
