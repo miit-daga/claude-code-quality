@@ -10,7 +10,7 @@ Java: PMD 7 + CPD for complexity, unused code and duplication, Checkstyle for si
 |---|---|---|
 | Cyclomatic < 22 | PMD + Checkstyle / detekt | PMD `CyclomaticComplexity` `methodReportLevel=22`; Checkstyle `CyclomaticComplexity` `max=21` / `CyclomaticComplexMethod` `threshold: 22` |
 | Cognitive < 22 | PMD / detekt | `CognitiveComplexity` `reportLevel=22` / `CognitiveComplexMethod` `threshold: 22` (inactive by default) |
-| Halstead < 80 | none native | `scripts/halstead_gate.py` (per file, multimetric) |
+| Halstead < 80 | none native | `scripts/halstead_gate.py` (per file, multimetric): advisory unless a calibrated `--file-max` is set |
 | File < 500 lines | Checkstyle / bundled script | `FileLength` `max=499` / `scripts/loc_budget.py` (detekt has no file-length rule) |
 | 100% line + branch | JaCoCo / Kover | `check`: LINE and BRANCH `COVEREDRATIO` 1.00 / `verify`: LINE and BRANCH bounds at 100 |
 | CRAP < 25 | bundled script | `complexity_gate.py --coverage target/site/jacoco/jacoco.xml` / `build/reports/kover/report.xml` |
@@ -195,7 +195,9 @@ src/test/java/com/example/ArchitectureTest.java
       </ignoredUnusedDeclaredDependencies></configuration></execution></executions></plugin>
   <plugin><groupId>org.pitest</groupId><artifactId>pitest-maven</artifactId><version>1.30.1</version>
     <dependencies><dependency><groupId>org.pitest</groupId><artifactId>pitest-junit5-plugin</artifactId><version>1.2.3</version></dependency></dependencies>
-    <configuration><targetClasses><param>com.example.*</param></targetClasses><mutators><mutator>STRONGER</mutator></mutators>
+    <!-- No <targetClasses> here: PIT defaults to ${project.groupId}*, and a pom value would
+         override -DtargetClasses, breaking the changed-classes-only run below. -->
+    <configuration><mutators><mutator>STRONGER</mutator></mutators>
       <maxSurviving>0</maxSurviving> <!-- counts SURVIVED + NO_COVERAGE -->
       <features><feature>+auto_threads</feature></features><outputFormats><param>XML</param><param>HTML</param></outputFormats>
       <timestampedReports>false</timestampedReports>
@@ -324,13 +326,14 @@ potential-bugs:
 
 ```make
 S := tools/quality
-SRC := src/main/java          # src/main/kotlin for Kotlin
+# src/main/kotlin for Kotlin. Keep comments off assignment lines (make keeps the spaces).
+SRC := src/main/java
 quality-fast:
 	./mvnw -B -q validate        # spotless + checkstyle, no compile
 	python3 $(S)/loc_budget.py src
 	python3 $(S)/comment_density.py src --fail-on-commented-code
 	# any-type skips equals(Object o) / equals(other: Any?) lines; IllegalType also covers Java
-	python3 $(S)/suppression_audit.py src --zero coverage mutation skipped any-type todo
+	python3 $(S)/suppression_audit.py src --zero coverage skipped any-type todo --baseline .quality/suppressions.json
 	python3 $(S)/complexity_gate.py $(SRC) --params-max 5 --nloc-max 50
 	python3 $(S)/halstead_gate.py $(SRC)
 quality: quality-fast
@@ -357,9 +360,9 @@ Then `python <skill-dir>/scripts/complexity_gate.py src/main/java --coverage tar
   T=$(git diff --name-only origin/main...HEAD -- 'src/main/java/*.java' | sed -e 's#src/main/java/##' -e 's#\.java$#*#' -e 's#/#.#g' | paste -sd, -)
   [ -z "$T" ] || ./mvnw -B test-compile org.pitest:pitest-maven:mutationCoverage -DtargetClasses="$T"   # Gradle: ./gradlew pitest -PpitTargets="$T"
   ```
-  The trailing `*` keeps inner classes in scope.
+  The trailing `*` keeps inner classes in scope. This works only because the pom sets no `<targetClasses>` (a pom value beats `-D`).
 - **Read survivors:** `target/pit-reports/index.html` (Gradle `build/reports/pitest/`) colours each line; `mutations.xml` lists `status="SURVIVED"` / `"NO_COVERAGE"` with the mutator and line.
-- **Equivalent mutants:** PIT's `FANN` feature (on by default) skips classes and methods carrying any annotation whose simple name is `Generated`, `DoNotMutate` or `CoverageIgnore` with CLASS or RUNTIME retention. PIT ships no such annotation; define one with a mandatory reason. It is method-granular, so extract the equivalent line into its own small method first. `suppression_audit.py` does not count it, so add `grep -rn '@DoNotMutate' src | wc -l` to the ratchet. Never name it `*Generated*`: JaCoCo also drops such methods from coverage.
+- **Equivalent mutants:** PIT's `FANN` feature (on by default) skips classes and methods carrying any annotation whose simple name is `Generated`, `DoNotMutate` or `CoverageIgnore` with CLASS or RUNTIME retention. PIT ships no such annotation; define one with a mandatory reason. It is method-granular, so extract the equivalent line into its own small method first. `suppression_audit.py` counts it under `mutation`, so each new one raises the baseline and needs the user's approval. Never name it `*Generated*`: JaCoCo also drops such methods from coverage.
   ```java
   @Retention(RetentionPolicy.CLASS) @Target({ElementType.METHOD, ElementType.TYPE})
   public @interface DoNotMutate { String reason(); }

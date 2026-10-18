@@ -12,7 +12,7 @@ Versions checked: RuboCop 1.92, SimpleCov 1.3, mutant 0.17, rubocop-sorbet 0.17,
 |------|------|----------------|
 | Cyclomatic < 22 | RuboCop `Metrics/CyclomaticComplexity` | `Max: 21` (offense when score > Max) |
 | Cognitive < 22 | RuboCop `Metrics/PerceivedComplexity` (closest analogue: counts `else`, weights `when`) | `Max: 21`. No native cognitive-complexity cop exists for Ruby |
-| Halstead < 80 | `scripts/halstead_gate.py` (multimetric, per file) | default `--max 80`, fails at >= 80 |
+| Halstead < 80 | `scripts/halstead_gate.py` (multimetric, per file) | advisory by default (per-file scale); gate with a calibrated `--file-max` |
 | File < 500 lines | `scripts/loc_budget.py` | default 499. `Metrics/ClassLength`/`ModuleLength` count only code lines inside one class, so they are an early warning, not the gate |
 | 100% line + branch | SimpleCov | `enable_coverage :branch`, `minimum_coverage line: 100, branch: 100` |
 | CRAP < 25 | `scripts/complexity_gate.py --coverage coverage/coverage.xml` | lizard's Ruby parser cuts some methods short (`case ... end`), so treat CRAP as triage and RuboCop as the CCN gate |
@@ -218,9 +218,9 @@ bin/packwerk check                             # Rails only
 python3 "$S/loc_budget.py" "${SRC[@]}" spec
 python3 "$S/halstead_gate.py" "${SRC[@]}"
 python3 "$S/comment_density.py" "${SRC[@]}" --fail-on-commented-code
-python3 "$S/suppression_audit.py" "${SRC[@]}" spec --zero coverage skipped any-type todo
-# suppression_audit.py knows `:nocov:` but not SimpleCov 1.x's `simplecov:disable`, Herb or strong_migrations escapes
-if grep -rnE "simplecov:disable|herb:disable|safety_assured" "${SRC[@]}"; then fail "unreviewed escape hatch"; fi
+# The audit counts `:nocov:`/`simplecov:disable` (coverage, held at zero), and `herb:disable` and
+# `safety_assured` (lint, ratcheted: each new one needs a reason and the user's approval).
+python3 "$S/suppression_audit.py" "${SRC[@]}" spec --zero coverage skipped any-type todo --baseline .quality/suppressions.json
 bundle exec rspec                              # 100% line + branch, writes coverage/coverage.xml
 python3 "$S/complexity_gate.py" "${SRC[@]}" --coverage coverage/coverage.xml   # CRAP < 25
 bundle exec mutant run --since "$BASE"         # 0 alive mutations in changed subjects

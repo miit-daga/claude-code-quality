@@ -16,14 +16,14 @@ in where an agent can't skip them.
 |---|---|
 | Cyclomatic complexity per function | < 22 |
 | Cognitive complexity per function | < 22 |
-| Halstead difficulty | < 80 |
+| Halstead difficulty per function | < 80 (per-file scores outside Python are advisory unless you set a per-file budget) |
 | Lines per file | < 500 |
 | Test coverage (line **and** branch) | 100% |
 | CRAP per function | < 25 |
 | Surviving mutants | 0 |
 | Dead code | 0 |
 | Duplicated / redundant code | 0 |
-| `any` / `unknown` and equivalents | 0 |
+| `any` / `unknown` and equivalents | 0 (except catch variables and the raw input of a boundary schema parser) |
 
 It also offers optional gates: ABC size, function length, parameter count, nesting
 depth, CSS/JS size budgets, comment density (no narrating or commented-out code), and a

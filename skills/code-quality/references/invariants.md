@@ -163,11 +163,16 @@ CREATE TABLE users (
   email        text NOT NULL
 );
 -- Only the auth service's role may write auth_identities; the app role cannot forge one.
+-- Grants do not bind a table's owner (or a superuser), so neither role may own the table:
+-- a separate migrations role owns it.
+ALTER TABLE auth_identities OWNER TO migrations_role;
 REVOKE INSERT, UPDATE ON auth_identities FROM app_role;
 GRANT  INSERT, UPDATE ON auth_identities TO auth_role;
 ```
 
-Now even a hand-written script or another service cannot insert an unauthenticated user.
+Now a hand-written script or another service connecting as `app_role` cannot insert an
+unauthenticated user. Anything connecting as the owner or a superuser still can, so keep
+those credentials out of application code.
 
 ### Rung 3: module boundary
 
@@ -244,6 +249,8 @@ Hypothesis stateful test: whatever sequence of signup, login and admin calls hap
 the set of user subjects is always a subset of verified identities:
 
 ```python
+import contextlib
+
 from hypothesis import strategies as st
 from hypothesis.stateful import RuleBasedStateMachine, invariant, rule
 
@@ -252,7 +259,10 @@ class SignupMachine(RuleBasedStateMachine):
     @rule(email=st.emails(), verified=st.booleans())
     def attempt_signup(self, email, verified):
         token = make_token(email) if verified else forge_token(email)
-        api.signup(token, email)          # may legitimately fail
+        # Rejecting a forged token is the expected outcome; an exception from a rule would
+        # otherwise fail the test. Name the API's real rejection error so anything else still fails.
+        with contextlib.suppress(AuthRejected):
+            api.signup(token, email)
 
     @invariant()
     def users_are_verified(self):
@@ -270,7 +280,7 @@ jqwik's actions.
 |---|---|
 | Tenant isolation (every query scoped to the tenant) | Postgres row-level security + a lint rule banning unscoped queries + a property test across two tenants |
 | Money is never floating point | `Money` value type (integer minor units or decimal) + lint ban on float in money modules |
-| State machine transitions only along allowed edges | sealed state types or a transition table as the only mutator + a DB CHECK on the status column + a model-based test |
+| State machine transitions only along allowed edges | sealed state types or a transition table as the only mutator + a CHECK limiting the status to known values + transitions enforced in the database by a conditional update (`UPDATE invoices SET status = 'paid' WHERE id = $1 AND status = 'issued'`, then require exactly one row changed) or a trigger, because a CHECK sees only the new row, never the old one + a model-based test |
 | Idempotency (a request applied at most once) | UNIQUE constraint on the idempotency key + a property test with retries |
 | PII never logged | logger wrapper that accepts only a `Redacted` type + a semgrep rule on raw logger calls with user fields |
 | All timestamps UTC | `timestamptz` columns + a lint ban on naive datetimes (ruff `DTZ` rules for Python) |

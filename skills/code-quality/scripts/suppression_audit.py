@@ -17,6 +17,11 @@ languages, so the gates cannot be satisfied by suppression:
 "Blanket" suppressions (no rule named: a bare noqa, a bare eslint-disable,
 ts-ignore, a bare nolint) always fail unless --allow-blanket is given.
 
+Allowed by design (not counted): TS catch variables typed `unknown`, Python
+`import ... Any` lines, Go generic constraints, `equals(Object)` overrides, and
+any-type hits in boundary files passed to --any-type-allow (the schema parsers
+that receive raw input, e.g. --any-type-allow 'src/boundary/*').
+
 Modes:
   python suppression_audit.py src                          # report; fail on blanket only
   python suppression_audit.py src --zero coverage skipped  # these categories must be 0
@@ -29,6 +34,7 @@ Exit code 1 on any failure, 0 otherwise.
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import json
 import re
 import sys
@@ -48,6 +54,10 @@ CPP = {".c", ".h", ".cc", ".cpp", ".cxx", ".hpp"}
 # equals(Object o) / equals(other: Any?) are required signatures, not escape hatches.
 EQUALS = r"\bequals\s*\("
 # `[T any]` is a generic constraint (anything is allowed by design), not an untyped value.
+# `unknown` is the correct type for a caught error: `catch (e: unknown)`, `.catch((e: unknown) => ...)`.
+TS_CATCH = r"catch\s*\(\s*\(?\s*\w+\s*:\s*unknown\b"
+# `from typing import Any` imports the name; only annotations that use it are escape hatches.
+PY_IMPORT = r"^\s*(from\s+\S+\s+)?import\b"
 GO_CONSTRAINT = r"\[[^\]()]*\s+any\s*[\],]"
 
 
@@ -130,8 +140,8 @@ MARKERS = [
     Marker("skipped", "phpunit skip", r"markTestSkipped\(|markTestIncomplete\(|->skip\(", {".php"}),
     # escape hatches from the type system
     Marker("any-type", "TS any", r"(:\s*|\bas\s+|<\s*|,\s*|\|\s*|=\s*)any\b(?!\s*[:(])", TS, code_only=True),
-    Marker("any-type", "TS unknown", r"(:\s*|\bas\s+|<\s*|,\s*|\|\s*)unknown\b", TS, code_only=True),
-    Marker("any-type", "Python Any", r"(:\s*|->\s*|\[\s*|,\s*|\|\s*|typing\.)Any\b", PY, code_only=True),
+    Marker("any-type", "TS unknown", r"(:\s*|\bas\s+|<\s*|,\s*|\|\s*)unknown\b", TS, code_only=True, unless=TS_CATCH),
+    Marker("any-type", "Python Any", r"(:\s*|->\s*|\[\s*|,\s*|\|\s*|typing\.)Any\b", PY, code_only=True, unless=PY_IMPORT),
     Marker("any-type", "Go any/interface{}", r"\binterface\{\}|[\s\[\](*,]any\b", {".go"}, code_only=True, unless=GO_CONSTRAINT),
     Marker("any-type", "C# dynamic", r"\bdynamic\b", {".cs"}, code_only=True),
     Marker("any-type", "Sorbet T.untyped/T.unsafe", r"T\.(untyped|unsafe)\b", RB, code_only=True),
@@ -177,6 +187,12 @@ def scan(path: Path) -> list[Hit]:
     return hits
 
 
+def boundary_any(hit: Hit, globs: list[str]) -> bool:
+    """Untyped input is legitimate inside the boundary parsers named by --any-type-allow."""
+    posix = hit.path.as_posix()
+    return hit.marker.category == "any-type" and any(fnmatch.fnmatch(posix, g) for g in globs)
+
+
 def counts(hits: list[Hit]) -> dict[str, int]:
     counter = Counter(f"{h.marker.category}/{h.marker.name}" for h in hits)
     counter.update(f"blanket/{h.marker.name}" for h in hits if h.blanket)
@@ -198,6 +214,8 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--zero", nargs="*", default=[], help=f"categories that must have no hits at all: {CATEGORIES}")
     ap.add_argument("--baseline", help="JSON from --write-baseline; fail if any count grew")
     ap.add_argument("--write-baseline", help="write current counts to this JSON file and exit 0")
+    ap.add_argument("--any-type-allow", nargs="*", default=[],
+                    help="fnmatch globs for boundary files (schema parsers) where any-type hits are not counted")
     ap.add_argument("--allow-blanket", action="store_true", help="do not fail on blanket suppressions")
     ap.add_argument("--list", nargs="*", default=[], help="print every hit in these categories")
     ap.add_argument("--exclude", nargs="*", default=[], help="fnmatch globs on the relative path to skip")
@@ -242,7 +260,7 @@ def main() -> int:
     split_categories(args)
     this_file = Path(__file__).resolve()
     files = [f for f in list_files(args.paths, SOURCE_EXTS, args.exclude) if f.resolve() != this_file]
-    hits = [h for f in files for h in scan(f)]
+    hits = [h for f in files for h in scan(f) if not boundary_any(h, args.any_type_allow)]
     current = counts(hits)
     if args.write_baseline:
         Path(args.write_baseline).parent.mkdir(parents=True, exist_ok=True)

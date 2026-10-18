@@ -4,9 +4,14 @@
 Difficulty climbs when code juggles many operators and reuses the same operands
 over and over, which is a good proxy for "hard to read in one pass".
 
-  * Python files: per function, via radon (`pip install radon`).
+  * Python files: per function, via radon (`pip install radon`). This is the
+    gate: a function at or above --max fails.
   * Every other language: per file, via multimetric (`pip install multimetric`),
-    which tokenises 50+ languages with Pygments.
+    which tokenises 50+ languages with Pygments. A per-file score is a different
+    measurement on a different scale (well-written files of a few dozen lines can
+    exceed 80), so these scores are ADVISORY by default: reported, never failing.
+    To gate them, set a per-file budget calibrated on the project with --file-max.
+    Never split a file only to lower its per-file score.
 
 Different tools count operators and operands differently, so the same code can
 score very differently across tools (and per-file scores run higher than
@@ -15,10 +20,11 @@ distribution, and keep the threshold fixed for that tool; do not compare
 numbers across tools.
 
 Examples:
-  python halstead_gate.py src                 # D < 80
+  python halstead_gate.py src                        # Python functions D < 80; other files advisory
   python halstead_gate.py src --max 40 --top 10
+  python halstead_gate.py web --file-max 150         # gate per-file scores at a calibrated budget
 
-Exit code 1 if anything is at or above the threshold, 0 otherwise.
+Exit code 1 if a Python function is at/over --max, or a file is at/over --file-max.
 """
 
 from __future__ import annotations
@@ -43,6 +49,8 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("paths", nargs="*", default=["."])
     ap.add_argument("--max", type=float, default=80.0, help="difficulty must be strictly below this (default 80)")
     ap.add_argument("--exclude", nargs="*", default=[], help="fnmatch globs on the relative path to skip")
+    ap.add_argument("--file-max", type=float, default=None,
+                    help="per-file budget for non-Python files; without it per-file scores are advisory")
     ap.add_argument("--top", type=int, default=0, help="also print the N highest scores")
     return ap.parse_args()
 
@@ -92,16 +100,24 @@ def main() -> int:
     files = list_files(args.paths, SOURCE_EXTS - NON_CODE, args.exclude)
     py = [f for f in files if f.suffix in {".py", ".pyi"}]
     other = [f for f in files if f not in py]
-    scores = (python_scores(py) if py else []) + (multimetric_scores(other) if other else [])
-    failing = [(where, d) for where, d in scores if d >= args.max]
-    for where, d in sorted(failing, key=lambda s: -s[1]):
-        print(f"{where}: Halstead difficulty {d:.1f} >= {args.max:g}")
+    fn_scores = python_scores(py) if py else []
+    file_scores = multimetric_scores(other) if other else []
+    scores = fn_scores + file_scores
+    failing = [(where, d, args.max) for where, d in fn_scores if d >= args.max]
+    if args.file_max is not None:
+        failing += [(where, d, args.file_max) for where, d in file_scores if d >= args.file_max]
+    else:
+        advisory = sorted(((w, d) for w, d in file_scores if d >= args.max), key=lambda s: -s[1])
+        for where, d in advisory:
+            print(f"advisory: {where}: per-file Halstead difficulty {d:.1f} (not gated; see --file-max)")
+    for where, d, limit in sorted(failing, key=lambda s: -s[1]):
+        print(f"{where}: Halstead difficulty {d:.1f} >= {limit:g}")
     if args.top:
         print(f"\nTop {args.top}:")
         for where, d in sorted(scores, key=lambda s: -s[1])[: args.top]:
             print(f"  {d:6.1f}  {where}")
     status = "FAIL" if failing else "OK"
-    print(f"\nhalstead_gate: {status} - {len(scores)} units checked, {len(failing)} at/over {args.max:g}")
+    print(f"\nhalstead_gate: {status} - {len(scores)} units checked, {len(failing)} over budget")
     return 1 if failing else 0
 
 

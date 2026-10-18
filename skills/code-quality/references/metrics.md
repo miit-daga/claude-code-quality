@@ -65,7 +65,8 @@ cyclomatic but high on cognitive. Gate both.
 `noExcessiveCognitiveComplexity`, complexipy (Python), gocognit (Go), PMD
 `CognitiveComplexity` (Java), detekt `CognitiveComplexMethod` (Kotlin), Sonar S3776
 (C#), clippy `cognitive_complexity` (Rust, a different formula), RuboCop
-`Metrics/PerceivedComplexity` (Ruby, close but not identical), clang-tidy
+Ruby has no true cognitive-complexity cop (`Metrics/PerceivedComplexity` is a weighted
+cyclomatic score with no nesting penalty, so pair it with `Metrics/BlockNesting`), clang-tidy
 `readability-function-cognitive-complexity`, and for any language lizard parses, lizard's
 `cognitive` extension (`lizard -Ecognitive`, used by `scripts/complexity_gate.py`).
 
@@ -92,6 +93,13 @@ gives larger ones because a whole file has more operators and operand reuse. In 
 environment the same pricing logic scored 6.6 in radon (per function) and 27.9 in
 multimetric (per file, TypeScript). Pick one tool per language, measure the existing
 distribution, and keep the threshold fixed for that tool.
+
+**Per function vs per file.** The budget of 80 is a per-function budget, and only Python
+(radon) is gated per function. Per-file scores are a different measurement: on a
+well-written TypeScript library, about half the files score over 80, including one of 57
+lines. So `scripts/halstead_gate.py` reports per-file scores as advisory and fails on them
+only when the project sets its own calibrated per-file budget (`--file-max`). Never split
+a file just to lower its per-file score.
 
 **Gaming:** introducing throwaway variable names to inflate n2 (distinct operands).
 Counter: review. Meaningless intermediate names (`tmp1`, `val2`) are slop in their own
@@ -122,8 +130,9 @@ Rust branch coverage via cargo-llvm-cov needs nightly. Where branches can't be
 measured, mutation testing covers the gap.
 
 **Legitimate exclusions** (each listed in config with a reason, never inline by
-default): `if TYPE_CHECKING:` blocks, `@overload` stubs, `raise NotImplementedError` in
-abstract methods, `__repr__` of debug-only classes, platform-specific branches tested
+default): `if TYPE_CHECKING:` blocks, `@overload` stubs, abstract methods and protocol
+members written with a `...` body (not `raise NotImplementedError`, which a `super()` call
+can reach), `__repr__` of debug-only classes, platform-specific branches tested
 in a different CI job, and `main()` entry points that only wire things up (test the
 wiring separately or keep it trivial).
 
@@ -219,7 +228,10 @@ third-party SDK results) is genuinely untyped at the moment it arrives. Parse it
 the edge with a schema (zod / valibot, pydantic / msgspec, serde, `encoding/json` into
 structs, records with validation) and give the rest of the code the typed result. The
 `unknown` (or equivalent) appears only inside that parser function. Allow it in that
-file with a path-scoped rule override, not with inline suppressions.
+file with a path-scoped rule override (and `suppression_audit.py --any-type-allow
+'<glob>'`), not with inline suppressions. The other allowed use is a caught error:
+`catch (e: unknown)` and promise `.catch((e: unknown) => ...)` callbacks, which the audit
+script does not count.
 
 **Gaming:** swapping `any` for an equally empty type (`object` without narrowing,
 `Record<string, unknown>`, `Map<String, Object>`, `dict[str, object]`), or casting

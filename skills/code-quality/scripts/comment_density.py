@@ -5,9 +5,10 @@ Agent-written code tends to narrate itself ("# Loop over the items" above a
 for-loop). That noise costs reading time and goes stale. This script:
 
   1. FAILS when a file's comment-to-code ratio is above --max-ratio.
-  2. REPORTS likely narrating comments (comment words mostly restate the next
-     code line). Add --fail-on-narration to make them fail.
-  3. REPORTS likely commented-out code. Add --fail-on-commented-code to fail.
+  2. FAILS on likely narrating comments (comment words mostly restate the next
+     code line). --no-fail-on-narration turns this into a report only.
+  3. FAILS on likely commented-out code. --no-fail-on-commented-code turns this
+     into a report only.
 
 What does NOT count as a comment here: doc comments directly above a
 declaration (docstrings, JSDoc, Go doc comments, YARD, rustdoc), the license
@@ -18,7 +19,7 @@ one exists (ruff ERA001, sonarjs/no-commented-code); 2. and 3. are heuristics.
 
 Examples:
   python comment_density.py src
-  python comment_density.py . --max-ratio 0.15 --fail-on-narration
+  python comment_density.py . --max-ratio 0.15 --no-fail-on-narration   # legacy code: report narration only
 
 Exit code 1 if any enabled check fails, 0 otherwise.
 """
@@ -42,15 +43,19 @@ SLASH = {
 }
 DASH = {".lua"}
 
+# A declaration keyword is followed by whitespace and a name (`data class Foo`, `type Foo`,
+# `func (r *Repo)`) or a generic list (`impl<T>`), never by `=`, `:`, `.` or `(`. That keeps
+# assignments such as `data = read(path)` or `type: str = ...` from passing as declarations.
 DECLARATION = re.compile(
     r"^\s*(export\s+)?(default\s+)?(pub(\([\w:]+\))?\s+)?(async\s+)?"
-    r"(def|class|module|func|fn|function|interface|type|struct|enum|trait|impl|"
+    r"((def|class|module|func|fn|function|interface|type|struct|enum|trait|impl|"
     r"public|private|protected|internal|static|abstract|override|sealed|data|object|package|"
-    r"namespace|record|@|\[)"
+    r"namespace|record)(?=\s+[\w(<\[*&$]|<)|@|\[)"
 )
 # Variable declarations only count as documented declarations at module level;
 # indented ones are ordinary statements inside a function body.
 TOP_LEVEL_BINDING = re.compile(r"^(export\s+)?(const|let|var|val)\b")
+IMPORTISH = re.compile(r"^\s*(import\b|from\s+\S+\s+import\b|package\b|using\b|use\b|require\b|#include\b|module\b|<\?php)")
 DIRECTIVE = re.compile(
     r"^(#!|#\s*-\*-|#\s*(type:|noqa|pragma|pylint|mypy|pyright|fmt:|isort|rubocop|frozen_string_literal|"
     r"typed:|encoding)|//\s*(eslint|@ts-|go:|nolint|NOLINT|prettier|biome|Stryker|istanbul|c8|v8|"
@@ -158,8 +163,17 @@ def first_code_index(lines: list[str], suffix: str) -> int:
     return len(lines)
 
 
+def is_file_header(lines: list[str], end: int, header_end: int) -> bool:
+    """A top-of-file block is a header (license, module summary) only when a blank line,
+    an import or a declaration follows it; directly above a statement it is a comment."""
+    if end >= header_end:
+        return False
+    after = lines[end + 1] if end + 1 < len(lines) else ""
+    return not after.strip() or bool(IMPORTISH.match(after) or DECLARATION.match(after))
+
+
 def skip_block(lines: list[str], start: int, end: int, header_end: int) -> bool:
-    if end < header_end or is_doc_marker(lines[start]):
+    if is_file_header(lines, end, header_end) or is_doc_marker(lines[start]):
         return True
     following = next_code_line(lines, end)
     return bool(DECLARATION.match(following) or TOP_LEVEL_BINDING.match(following))
@@ -197,8 +211,10 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("paths", nargs="*", default=["."])
     ap.add_argument("--max-ratio", type=float, default=0.25, help="max comment lines per code line (default 0.25)")
     ap.add_argument("--min-code", type=int, default=20, help="ignore files with fewer code lines (default 20)")
-    ap.add_argument("--fail-on-narration", action="store_true")
-    ap.add_argument("--fail-on-commented-code", action="store_true")
+    ap.add_argument("--fail-on-narration", action=argparse.BooleanOptionalAction, default=True,
+                    help="fail on narrating comments (default: on)")
+    ap.add_argument("--fail-on-commented-code", action=argparse.BooleanOptionalAction, default=True,
+                    help="fail on commented-out code (default: on)")
     ap.add_argument("--exclude", nargs="*", default=[], help="fnmatch globs on the relative path to skip")
     return ap.parse_args()
 

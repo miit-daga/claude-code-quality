@@ -13,7 +13,7 @@ PHPUnit 12–13, Infection 0.35, Psalm 6.20, PHPCS 4.0, Slevomat 8.31.
 |------|------|----------------|
 | Cyclomatic < 22 | PHPCS `Generic.Metrics.CyclomaticComplexity` | `absoluteComplexity` 21 (error when > value). PHPMD 3 alternative: `CyclomaticComplexity` `maximum` 21 (PHPMD 2.x: `reportLevel` 22, which fires at >=) |
 | Cognitive < 22 | `tomasvotruba/cognitive-complexity` (PHPStan) | `cognitive_complexity.function: 21` (reported when > limit, despite the "keep it under" message) |
-| Halstead < 80 | `scripts/halstead_gate.py` (multimetric, per file) | fails at >= 80 |
+| Halstead < 80 | `scripts/halstead_gate.py` (multimetric, per file) | advisory by default (per-file scale); gate with a calibrated `--file-max` |
 | File < 500 lines | `scripts/loc_budget.py` | default 499 physical lines |
 | 100% line + branch | PHPUnit + Xdebug path coverage → Clover → `tools/check_clover.py` | PHPUnit has no built-in fail-under. PCOV is line-only |
 | CRAP < 25 | the same Clover check (PHPUnit writes `crap` per method) and `scripts/complexity_gate.py --coverage build/clover.xml` | |
@@ -282,7 +282,7 @@ from PHPUnit's own CCN. `tools/check_clover.py` gates on that number, and lizard
 - **Runtime**: only the covering tests run per mutant. Minutes for a library, much longer for a
   framework app, so use `--threads=max` and `--git-diff-lines` in CI.
 - **Pest**: Infection's schema no longer lists Pest. Use `pest --mutate --parallel --min=100`;
-  the audit does not count its `@pest-mutate-ignore` marker.
+  the audit counts its `@pest-mutate-ignore` marker under `mutation`.
 
 ## Killing untyped escape hatches
 

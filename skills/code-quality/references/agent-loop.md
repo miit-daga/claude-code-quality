@@ -33,7 +33,9 @@ scripts, justfile, nox, Gradle/Maven task, `mix` alias):
 Example Makefile skeleton (adapt the tool lines from the language reference):
 
 ```make
-S := tools/quality            # vendored copies of the skill's scripts
+# Vendored copies of the skill's scripts. Keep comments off assignment lines:
+# make keeps the spaces before a trailing comment as part of the value.
+S := tools/quality
 SRC := src
 
 quality-fast:
@@ -58,8 +60,13 @@ quality: quality-fast
 .PHONY: quality quality-fast
 ```
 
-On a new project, drop the `--baseline` flag and use `--zero` for every category
-you want held at zero from day one (typically `coverage mutation skipped any-type todo`).
+On a new project, write an all-zero baseline on day one (`suppression_audit.py .
+--write-baseline .quality/suppressions.json`), keep `--baseline`, and add `--zero` for the
+categories that never have a legitimate use: `coverage skipped any-type todo`. Leave
+`lint` and `mutation` on the baseline. A named lint suppression with a reason, or an
+annotated equivalent mutant, is occasionally legitimate, and the baseline turns each one
+into a visible, user-approved change instead of a silent one. If the project parses raw
+input in dedicated boundary files, pass them with `--any-type-allow 'src/boundary/*'`.
 
 ## 2. Vendor the scripts into the repo
 
@@ -246,7 +253,10 @@ jobs:
       # - language setup + dependency cache steps from the language reference
       - run: make quality
         env:
-          BASE_REF: origin/${{ github.base_ref || 'main' }}
+          # PRs diff against the target branch. Pushes diff against the branch's previous tip,
+          # not against itself (which would be an empty diff). `before` is all zeros on the
+          # first push of a branch: diff-based steps must then fall back to a full run.
+          BASE_REF: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || github.event.before }}
       - name: Guard gate configuration
         if: github.event_name == 'pull_request'
         run: |
@@ -296,9 +306,11 @@ paths:
    }
    ```
 
-   List the project's actual gate files. Deny rules don't stop shell commands (`sed`,
-   `cat >`), so they are a guard rail, not a lock. The CI config guard and CODEOWNERS
-   are the lock.
+   List the project's actual gate files. `Edit` deny rules also cover the file
+   commands Claude Code recognizes in Bash (`cat`, `head`, `tail`, `sed`, `tee`) and
+   `>` / `<` redirect targets, but not a program that opens files itself, such as a
+   `python -c` or `node -e` one-liner or a script. They are a guard rail, not a lock.
+   The CI config guard and CODEOWNERS are the lock.
 2. **CODEOWNERS** on the gate files so a human must approve changes:
    ```
    /.quality/                @team-leads

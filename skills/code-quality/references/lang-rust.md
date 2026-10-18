@@ -15,7 +15,7 @@ cargo-llvm-cov 0.9.
 |------|------|----------------|
 | Cyclomatic < 22 | **no clippy lint**. `scripts/complexity_gate.py` (lizard) | default `--ccn-max 21` |
 | Cognitive < 22 | `lizard -Ecognitive` (SonarSource spec; tested with lizard 1.24.1); clippy `cognitive_complexity` as an editor-time signal | lizard `-T cognitive_complexity=21` warns at `> 21`. Clippy: `restriction` group, `cognitive-complexity-threshold = 21`, fires at `> 21`. Clippy's own docs say the lint does not measure true cognitive complexity |
-| Halstead difficulty < 80 | `scripts/halstead_gate.py` (per file, via multimetric) | default `--max 80` |
+| Halstead difficulty < 80 | `scripts/halstead_gate.py` (per file, via multimetric) | advisory by default (per-file scale); gate with a calibrated `--file-max` |
 | File < 500 lines | `scripts/loc_budget.py` | no clippy lint exists |
 | 100% coverage | cargo-llvm-cov | Lines: `--fail-uncovered-lines 0`. Branch coverage needs **nightly** (`--branch`, unstable) and has no fail flag, so check `BRF`/`BRH` in the lcov file. On stable, `--fail-uncovered-regions 0` is a partial proxy (see Coverage) |
 | CRAP < 25 | `complexity_gate.py --coverage lcov.info` | |
@@ -26,7 +26,7 @@ cargo-llvm-cov 0.9.
 | ABC ≤ 17 | none for Rust | lizard token count is the only proxy |
 | Function ≤ 50 NLOC | clippy `too_many_lines` (`pedantic`) | `too-many-lines-threshold = 50`. Counts only lines containing code. Fires at `> 50` |
 | Params ≤ 5 | clippy `too_many_arguments` (`complexity`) | `too-many-arguments-threshold = 5`, fires at `> 5`. Also `fn_params_excessive_bools` (`pedantic`) |
-| Nesting ≤ 3 | clippy `excessive_nesting` (`complexity`; inert until a threshold is set) | `excessive-nesting-threshold = 5`. It counts **every `{}` block** plus `impl`/`trait`/inline `mod`, and fires at `> 5`. That allows 3 control levels inside an `impl` method and 4 in a free function |
+| Nesting ≤ 3 | clippy `excessive_nesting` (`complexity`; inert until a threshold is set) | `excessive-nesting-threshold = 5`. It counts **every `{}` block** plus `impl`/`trait`/inline `mod`, and fires at `> 5`. That allows 3 control levels inside an `impl` method but 4 in a free function, so it is looser than ≤ 3 there. For an exact ≤ 3 everywhere, add `lizard -l rust -ENS -Tmax_nested_structures=3 -w src` (lizard's nesting count is accurate for brace languages) |
 | Bool operators ≤ 3 | ast-grep `rust-max-bool-ops` | `nonminimal_bool` / `overly_complex_bool_expr` (`pedantic`) only simplify; they do not count |
 | Comment density, commented-out code | `scripts/comment_density.py --fail-on-commented-code` | no clippy lint for commented-out code |
 | Suppression ratchet | clippy `allow_attributes` + `allow_attributes_without_reason` (`restriction`); rustc `unfulfilled_lint_expectations`; `scripts/suppression_audit.py` | forces `#[expect(lint, reason = "...")]`, and a stale `expect` fails. The script counts `#[allow(`/`#[expect(`, `#[mutants::skip]`/`exclude_re` and tarpaulin exclusions |
@@ -206,7 +206,7 @@ quality-fast:
 	.venv/bin/lizard -l rust -Ecognitive -C 21 -T cognitive_complexity=21 -w src   # -C 21 overrides lizard's default CCN 15 warning
 	$(PY) $(S)/halstead_gate.py src
 	$(PY) $(S)/comment_density.py src --fail-on-commented-code
-	$(PY) $(S)/suppression_audit.py src tests --zero coverage mutation skipped any-type todo
+	$(PY) $(S)/suppression_audit.py src tests --zero coverage skipped any-type todo --baseline .quality/suppressions.json
 	cargo test --all-features --locked
 
 quality: quality-fast

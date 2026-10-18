@@ -15,9 +15,8 @@ disable-model-invocation: true
 
 # Code quality gates
 
-**Run this skill only when the user invokes it explicitly** (`/code-quality`, or a
-direct request to use it by name). Do not start it on your own initiative, even if a task
-looks related.
+**Run this skill only when the user invokes it explicitly** by typing `/code-quality`.
+Do not start it on your own initiative, even if a task looks related.
 
 Agents optimise against whatever feedback loop they are given. A linter rule that
 would feel draconian to a human ("no function above complexity 21", "no file over
@@ -50,14 +49,14 @@ Defaults the user asked for. Tighten freely; never loosen without the user's say
 |---|------|--------|------------------------------|
 | 1 | Cyclomatic complexity (per function) | < 22 | Caps the number of paths; forces decomposition instead of `if` pile-ups |
 | 2 | Cognitive complexity (per function) | < 22 | Penalises nesting and broken flow, which cyclomatic misses |
-| 3 | Halstead difficulty (per function) | < 80 | Catches dense, operator-heavy code that is short but hard to read |
+| 3 | Halstead difficulty (per function) | < 80 | Catches dense, operator-heavy code that is short but hard to read. Gated per function where the tool supports it (Python); per-file scores (other languages) are advisory unless the project calibrates a per-file budget |
 | 4 | Lines per file | < 500 | Keeps every file loadable in one read, for humans and agents |
 | 5 | Test coverage (line **and** branch) | 100% | No unexecuted code. Exclusions only for provably unreachable lines, each listed with a reason |
 | 6 | CRAP per function | < 25 | Complexity × lack of coverage. Ranks what to test or simplify first |
 | 7 | Surviving mutants | 0 | Proves tests check behaviour, not just execute lines |
 | 8 | Dead code | 0 | Unused functions, exports, files, params, deps |
 | 9 | Redundant code | 0 | Copy-paste duplication, no-op wrappers, re-implemented stdlib |
-| 10 | `any` / `unknown` (and equivalents) | 0 | Untyped holes are where agents hide confusion. Narrow at the boundary instead |
+| 10 | `any` / `unknown` (and equivalents) | 0 | Untyped holes are where agents hide confusion. Two uses are allowed: catch variables, and the raw input of a schema parse in a designated boundary file |
 
 **Extended gates ("what else").** Recommend these too, as suggested starting points
 rather than hard requirements:
@@ -152,10 +151,12 @@ Every change must pass `make quality` before you say it is done.
 - Files: < 500 lines. Split by responsibility, never by line count
 - Tests: 100% line and branch coverage, CRAP < 25, zero surviving mutants on changed code.
   Every test asserts observable behaviour
-- Zero dead code, zero duplication, zero `any`/`unknown` (parse external data at the boundary)
+- Zero dead code, zero duplication, zero `any`/`unknown`. Exceptions: catch variables, and the raw
+  input of a schema parse in a boundary file
 - Comments explain why, never what. No commented-out code, no TODOs without an issue link
 - Never loosen a threshold, add a blanket suppression, skip a test, or grow a baseline to get
-  green. If a budget looks wrong, stop and ask.
+  green. If a budget looks wrong, stop and ask. A genuine exception (an equivalent mutant, a
+  named suppression with a reason) grows the suppression baseline only with the user's approval
 - Invariants are listed in INVARIANTS.md. Each one is enforced by a type, a constraint, a lint
   rule or a test. Do not remove an enforcement.
 ```
@@ -226,7 +227,7 @@ scoreboard:
 Show the scoreboard and propose full enforcement or **ratchet mode**. In ratchet
 mode, all new and changed code is gated fully (diff coverage, `new-from-rev` linting,
 `--since` mutation runs), and existing violations are baselined so their count can
-only fall. Never let a baseline grow. List the dev dependencies and layers, and get
+only fall. A baseline grows only with the user's approval for a documented exception. List the dev dependencies and layers, and get
 a yes before installing.
 
 ### B4. Install the gates before cleaning
@@ -317,7 +318,8 @@ plus:
 A gate is only worth something if passing it means the code got better. Do not:
 
 - **Loosen a threshold, add a path exclusion, or edit a baseline upward** to get
-  green. If a budget seems wrong, stop and ask the user.
+  green. If a budget seems wrong, stop and ask the user. A genuine exception that needs
+  a baseline increase (see the next point) also needs the user's approval first.
 - **Add suppressions** (`noqa`, `eslint-disable`, `@ts-expect-error`, `nolint`,
   `pragma: no cover`, `Stryker disable`, …) unless the case is genuinely an exception.
   When it is, name the specific rule, write the reason inline, and report it. Blanket
@@ -335,8 +337,12 @@ A gate is only worth something if passing it means the code got better. Do not:
 - **Hide complexity in data** (giant config maps of lambdas) or in metaprogramming
   that the tools cannot see.
 
-`suppression_audit.py --baseline` enforces the first two mechanically. The rest needs
-judgement, so review your own diff against this list before finishing.
+Mechanical backstops cover part of this list. `suppression_audit.py --baseline` fails when
+suppression counts grow, and blanket suppressions always fail. The CI config guard and
+CODEOWNERS (see `references/agent-loop.md`) catch loosened thresholds, new path
+exclusions and baseline edits, but only as a human review step, so a baseline file that
+was edited upward will pass the audit itself. The rest needs judgement, so review your own
+diff against this list before finishing.
 
 ## Refactoring playbook for complexity and size
 
@@ -369,9 +375,9 @@ packages, exit 1 on failure, and take `--exclude` globs. Run with `--help` for t
 |--------|--------|-------|
 | `scripts/loc_budget.py` | lines per file; optional byte budget for CSS/JS | – |
 | `scripts/complexity_gate.py` | cyclomatic **and cognitive** per function, params, NLOC, **CRAP** from lcov / Cobertura / JaCoCo / Clover / Go cover profiles | `lizard` ≥ 1.24 |
-| `scripts/halstead_gate.py` | Halstead difficulty (per function for Python, per file elsewhere) | `radon`, `multimetric` |
+| `scripts/halstead_gate.py` | Halstead difficulty: gated per function for Python; per file elsewhere, advisory unless `--file-max` is set | `radon`, `multimetric` |
 | `scripts/comment_density.py` | comment ratio, narrating comments, commented-out code | – |
-| `scripts/suppression_audit.py` | lint/coverage/mutation suppressions, skipped tests, any-types, TODOs; blanket check; ratchet baseline | – |
+| `scripts/suppression_audit.py` | lint/coverage/mutation suppressions, skipped tests, any-types (catch variables and `--any-type-allow` boundary files exempt), TODOs; blanket check; ratchet baseline | – |
 
 Prefer a native tool when the language has a good one (for example ESLint `complexity`
 over lizard for TS) because it runs in the editor too. The scripts cover languages and

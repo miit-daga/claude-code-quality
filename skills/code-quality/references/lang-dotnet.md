@@ -10,7 +10,7 @@ Roslyn does most of the work at build time: `AnalysisMode=All`, nullable referen
 |---|---|---|
 | Cyclomatic < 22 | CA1502 + Sonar S1541 | `CodeMetricsConfig.txt`: `CA1502(Method): 21`; SonarLint.xml `maximumFunctionComplexityThreshold=21` |
 | Cognitive < 22 | Sonar S3776 | `threshold=21` (off by default in the NuGet package; enable it) |
-| Halstead < 80 | none native | `scripts/halstead_gate.py` (per file, multimetric) |
+| Halstead < 80 | none native | `scripts/halstead_gate.py` (per file, multimetric): advisory unless a calibrated `--file-max` is set |
 | File < 500 lines | `scripts/loc_budget.py` (physical lines); Sonar S104 | S104 counts code lines only: `maximumFileLocThreshold=499` as a second check |
 | 100% line + branch | coverlet.msbuild | `/p:Threshold=100 /p:ThresholdType=\"line,branch,method\" /p:ThresholdStat=total` |
 | CRAP < 25 | `scripts/complexity_gate.py` | `--coverage coverage/coverage.cobertura.xml` |

@@ -13,7 +13,7 @@ v2.15 (`.golangci.reference.yml`), gremlins v0.6.0 and the Go 1.25+ `go` command
 |------|------|----------------|
 | Cyclomatic < 22 | golangci `gocyclo`; `complexity_gate.py` (lizard) for CRAP | `min-complexity: 21`. Reports `> 21` (message reads "is high (> 21)") |
 | Cognitive < 22 | golangci `gocognit` | `min-complexity: 21`. Reports `> 21` |
-| Halstead difficulty < 80 | no Go linter. `scripts/halstead_gate.py` (per file, via multimetric) | default `--max 80`. `maintidx` (`under: 20`) uses Halstead volume but is a different metric |
+| Halstead difficulty < 80 | no Go linter. `scripts/halstead_gate.py` (per file, via multimetric) | advisory by default (per-file scale); gate with a calibrated `--file-max`. `maintidx` (`under: 20`) uses Halstead volume but is a different metric |
 | File < 500 lines | revive `file-length-limit`; `scripts/loc_budget.py` | `max: 499`. Passes while `lines <= max` |
 | 100% coverage | `go test -coverprofile` + go-test-coverage | Statement coverage only: Go has **no branch coverage**. Gate file/package/total at 100. Optional condition coverage: `gobco` (third party; it prints `Condition coverage: X/Y`, so parse that and require X = Y; its exit status is unverified) |
 | CRAP < 25 | `scripts/complexity_gate.py --coverage cover.out` | reads Go cover profiles directly |
@@ -197,7 +197,7 @@ quality-fast:
 	$(PY) $(S)/complexity_gate.py $(SRC) --params-max 5 --nloc-max 50
 	$(PY) $(S)/halstead_gate.py $(SRC)
 	$(PY) $(S)/comment_density.py $(SRC) --fail-on-commented-code
-	$(PY) $(S)/suppression_audit.py $(SRC) --zero coverage mutation skipped any-type todo
+	$(PY) $(S)/suppression_audit.py $(SRC) --zero coverage skipped any-type todo --baseline .quality/suppressions.json
 	go test -race -count=1 ./...
 
 quality: quality-fast
@@ -259,11 +259,17 @@ rm -f gremlins.json
 go tool gremlins unleash --diff "${1:-origin/main}" --output gremlins.json
 [ -f gremlins.json ] || { echo "no mutants in diff"; exit 0; }
 allow=.quality/equivalent-mutants.txt   # lines: <file_name>:<line>:<col> <TYPE>  # reason
-survivors=$(jq -r '.files[] | .file_name as $f | .mutations[]
+# jq runs on its own so that a jq error (bad JSON, changed schema) fails the gate.
+all=$(jq -r '.files[] | .file_name as $f | .mutations[]
     | select(.status == "LIVED" or .status == "NOT COVERED")
-    | "\($f):\(.line):\(.column) \(.type)"' gremlins.json \
-  | grep -vxF -f <(sed -e 's/[[:space:]]*#.*//' -e '/^$/d' "$allow" 2>/dev/null) || true)
+    | "\($f):\(.line):\(.column) \(.type)"' gremlins.json)
+known=""
+if [ -f "$allow" ]; then known=$(sed -e 's/[[:space:]]*#.*//' -e '/^[[:space:]]*$/d' "$allow"); fi
+survivors=$(printf '%s\n' "$all" | KNOWN="$known" awk '
+  BEGIN { n = split(ENVIRON["KNOWN"], k, "\n"); for (i = 1; i <= n; i++) skip[k[i]] = 1 }
+  NF && !($0 in skip)')
 [ -z "$survivors" ] || { printf 'Surviving mutants:\n%s\n' "$survivors"; exit 1; }
+echo "no surviving mutants"
 ```
 
 Reading survivors: run with `--output-statuses lc --output-diff-statuses l` to print

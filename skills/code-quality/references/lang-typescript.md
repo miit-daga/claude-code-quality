@@ -8,7 +8,7 @@
 |------|------|----------------|
 | Cyclomatic < 22 | ESLint `complexity` | `{ max: 21 }`; fires when > 21 (21 passes, 22 fails). Biome has no cyclomatic rule |
 | Cognitive < 22 | `sonarjs/cognitive-complexity` | `["error", 21]`; fires when > 21. Biome: `noExcessiveCognitiveComplexity` `maxAllowedComplexity: 21`, same semantics |
-| Halstead difficulty < 80 | `scripts/halstead_gate.py` (multimetric, per file) | no maintained ESLint rule; fails at ≥ 80 |
+| Halstead difficulty < 80 | `scripts/halstead_gate.py` (multimetric, per file) | no maintained ESLint rule. Per-file scores are advisory by default; to gate them, calibrate a per-file budget and pass `--file-max` |
 | File < 500 lines | ESLint `max-lines` | `{ max: 499, skipBlankLines: false, skipComments: false }`. Biome: `style/noExcessiveLinesPerFile` `maxLines: 499` |
 | 100% line + branch coverage | Vitest + `@vitest/coverage-v8` | `thresholds: { 100: true, perFile: true }`, `coverage.include` so untested files count |
 | CRAP < 25 | `scripts/complexity_gate.py --coverage coverage/lcov.info` | fails at ≥ 25 |
@@ -16,7 +16,7 @@
 | 0 dead code | knip; `noUnusedLocals`/`noUnusedParameters` | run `knip` and then `knip --production --strict` (catches code used only by tests) |
 | 0 duplication | jscpd 5; `sonarjs/no-identical-functions` | `.jscpd.json` `threshold: 0` exits 1 on any clone |
 | 0 `any` / `unknown` | `@typescript-eslint/no-explicit-any`, `no-unsafe-*` (strictTypeChecked); `no-restricted-syntax` `TSUnknownKeyword`; `consistent-type-assertions: never` | plus type-coverage 100 |
-| ABC size ≤ 17 | none for TS | proxies: `complexity`, `max-statements`, `complexity_gate.py` |
+| ABC size ≤ 17 | none for TS | proxies: `complexity`, `max-lines-per-function`, `complexity_gate.py` |
 | Function ≤ 50 NLOC | ESLint `max-lines-per-function` | `{ max: 50, skipBlankLines: true, skipComments: true }`. Biome's `noExcessiveLinesPerFunction` counted 62 lines for a 94-line body, so don't use it as the gate |
 | Params ≤ 5 | ESLint `max-params` | `{ max: 5 }`. Biome: `useMaxParams` `max: 5` |
 | Nesting ≤ 3 | ESLint `max-depth`, `max-nested-callbacks` | `{ max: 3 }` (4 in tests for describe > it > property > callback) |
@@ -88,7 +88,18 @@ import { defineConfig } from "eslint/config";
 import sonarjs from "eslint-plugin-sonarjs";
 import tseslint from "typescript-eslint";
 
-const noUnknown = { selector: "TSUnknownKeyword", message: "No `unknown`. Pass raw input straight into a schema parse." };
+// `unknown` is allowed only on a caught error: `catch (e: unknown)`, `.catch((e: unknown) => ...)` and the
+// rejection handler of `.then(ok, (e: unknown) => ...)`, which strictTypeChecked's
+// use-unknown-in-catch-callback-variable requires. Everywhere else it is banned.
+const CATCH_PARAM = [
+  "CatchClause > Identifier > TSTypeAnnotation > TSUnknownKeyword",
+  "CallExpression[callee.property.name='catch'] > :function > Identifier > TSTypeAnnotation > TSUnknownKeyword",
+  "CallExpression[callee.property.name='then'] > :function:nth-child(2) > Identifier > TSTypeAnnotation > TSUnknownKeyword",
+];
+const noUnknown = {
+  selector: `TSUnknownKeyword:not(${CATCH_PARAM.join(", ")})`,
+  message: "No `unknown`. Pass raw input straight into a schema parse.",
+};
 
 export default defineConfig(
   { ignores: ["dist/**", "coverage/**", "reports/**", ".stryker-tmp/**", "tools/**"] },
@@ -126,8 +137,11 @@ export default defineConfig(
   {
     files: ["**/*.test.ts"],
     rules: {
-      "max-lines-per-function": "off", // a describe() callback is one function; cap each test with max-statements
-      "max-statements": ["error", { max: 15 }],
+      // A describe() callback is one function holding every it() as a statement, so neither
+      // max-lines-per-function nor max-statements can cap a single test. Keep tests short with
+      // the no-logic rule below and it.each instead.
+      "max-lines-per-function": "off",
+      "max-statements": "off",
       "max-nested-callbacks": ["error", { max: 4 }], // describe > it > fc.property > callback
       "no-restricted-syntax": ["error", noUnknown, {
         selector: "CallExpression[callee.name=/^(it|test)$/] :matches(IfStatement, SwitchStatement, ForStatement, ForOfStatement, ForInStatement, WhileStatement, ConditionalExpression)",
@@ -302,7 +316,7 @@ Per-file CSS byte budget: `python3 tools/quality/loc_budget.py src --max-bytes 2
   "typecov": "type-coverage",
   "test": "vitest run",
   "coverage": "vitest run --coverage",
-  "budgets": "python3 tools/quality/loc_budget.py src && python3 tools/quality/comment_density.py src --fail-on-commented-code && python3 tools/quality/suppression_audit.py src --zero coverage mutation skipped any-type todo",
+  "budgets": "python3 tools/quality/loc_budget.py src && python3 tools/quality/comment_density.py src --fail-on-commented-code && python3 tools/quality/suppression_audit.py src --zero coverage skipped any-type todo --baseline .quality/suppressions.json",
   "metrics": "uv run --no-project --with lizard --with multimetric python tools/quality/complexity_gate.py src --exclude '*.test.ts' --params-max 5 --nloc-max 50 && uv run --no-project --with radon --with multimetric python tools/quality/halstead_gate.py src --exclude '*.test.ts'",
   "crap": "uv run --no-project --with lizard python tools/quality/complexity_gate.py src --exclude '*.test.ts' --coverage coverage/lcov.info",
   "deadcode": "knip && knip --production --strict",
@@ -334,7 +348,8 @@ Jest writes the same `coverage/lcov.info` with `coverageReporters: ["lcov"]`. Th
 - **Incremental:** `incremental: true` reuses results for unchanged code and tests (measured: 21 of 28 results reused after a one-line change). Use `--force` to rebuild. Run on changed files only in CI:
 
   ```bash
-  CHANGED=$(git diff --name-only origin/main...HEAD -- 'src/**/*.ts' ':!src/**/*.test.ts' | paste -sd, -)
+  # :(glob) makes **/ match zero or more directories; plain 'src/**/*.ts' skips files directly in src/.
+  CHANGED=$(git diff --name-only origin/main...HEAD -- ':(glob)src/**/*.ts' ':(glob,exclude)src/**/*.test.ts' | paste -sd, -)
   [ -z "$CHANGED" ] || npx stryker run --mutate "$CHANGED"
   ```
 
@@ -360,7 +375,7 @@ Jest writes the same `coverage/lcov.info` with `coverageReporters: ["lcov"]`. Th
   }
   ```
 
-- **Catch clauses** are implicitly `unknown` (no keyword written). Narrow with `instanceof` or a schema, never with `as Error`.
+- **Catch clauses** are implicitly `unknown` (no keyword needed). Promise `.catch` callbacks must be annotated `(e: unknown)`; the `noUnknown` selector allows exactly these catch parameters. Narrow with `instanceof` or a schema, never with `as Error`.
 - **Not acceptable as replacements:** `object`, `{}` (`no-empty-object-type`), `Record<string, unknown>` (also hits the `unknown` ban), `Function`, `as` / `as unknown as T`, `!`, a type parameter used once to launder a value, or `// @ts-expect-error` (it needs a 10-character description, and the audit counts it).
 
 ## Language-specific slop to hunt

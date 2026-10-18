@@ -23,7 +23,7 @@ Ruff formats and lints, complexipy checks cognitive complexity, basedpyright typ
 | Boolean operators ≤ 3 | ruff `PLR0916` (preview) | `max-bool-expr = 4`. It counts operands in an `if` condition (4 operands = 3 operators) and ignores `return`/assignment expressions |
 | CSS/JS byte budgets | n/a | `loc_budget.py --max-bytes` for any static assets the package ships |
 | Comment density, no commented-out code | `scripts/comment_density.py --fail-on-commented-code`; ruff `ERA001` | ratio ≤ 0.25 by default |
-| Suppression ratchet, no blanket | ruff `PGH004` blanket-noqa, `PGH003` blanket-type-ignore, `RUF100` unused-noqa; `scripts/suppression_audit.py` | `--zero coverage mutation skipped any-type todo`. The audit does not count `# complexipy: ignore`, so grep for it |
+| Suppression ratchet, no blanket | ruff `PGH004` blanket-noqa, `PGH003` blanket-type-ignore, `RUF100` unused-noqa; `scripts/suppression_audit.py` | `--zero coverage skipped any-type todo --baseline .quality/suppressions.json`. The audit also counts `# complexipy: ignore`, ignores `from typing import Any` lines, and skips boundary parsers passed to `--any-type-allow` |
 | Type coverage 100% | basedpyright `recommended` fails on any warning | numeric report: `mypy --any-exprs-report out src`, then `out/any-exprs.txt` Total must read 100.00% |
 | Architecture boundaries | import-linter (`lint-imports`) | `layers` and `forbidden` contracts; third-party modules in a contract need `include_external_packages = true` |
 | No unused dependencies | deptry | DEP001 missing, DEP002 unused, DEP003 transitive, DEP004 dev dep used in code |
@@ -150,7 +150,9 @@ source = ["src"]
 fail_under = 100
 show_missing = true
 skip_covered = true
-exclude_also = ["if TYPE_CHECKING:", "@overload", "raise NotImplementedError"]
+# Not `raise NotImplementedError`: a subclass calling super() reaches it, so it stays measured.
+# Give abstract methods and Protocol members a `...` body instead; there is nothing to cover.
+exclude_also = ["if TYPE_CHECKING:", "@overload"]
 
 [tool.mutmut]
 source_paths = ["src/shop"]
@@ -221,7 +223,7 @@ quality-fast:
 	$(RUN) python $(S)/complexity_gate.py $(SRC) --params-max 5 --nloc-max 50
 	$(RUN) python $(S)/halstead_gate.py $(SRC)
 	$(RUN) python $(S)/comment_density.py $(SRC) tests --fail-on-commented-code
-	$(RUN) python $(S)/suppression_audit.py $(SRC) tests --zero coverage mutation skipped any-type todo
+	$(RUN) python $(S)/suppression_audit.py $(SRC) tests --zero coverage skipped any-type todo --baseline .quality/suppressions.json
 	! grep -rn "complexipy: ignore" $(SRC)
 	$(RUN) pytest -q -x
 
@@ -361,7 +363,7 @@ repos:
       - id: suppressions
         name: suppression audit
         # trailing "--" stops --zero from swallowing the filenames pre-commit appends
-        entry: uv run --frozen python tools/quality/suppression_audit.py --zero coverage mutation skipped any-type todo --
+        entry: uv run --frozen python tools/quality/suppression_audit.py --zero coverage skipped any-type todo --baseline .quality/suppressions.json --
         language: system
         types: [python]
       - id: quality-fast

@@ -20,7 +20,7 @@ set the limit to the largest allowed value (21 for "< 22").
 |------|------|---------|
 | Cyclomatic < 22 | Credo `Refactor.CyclomaticComplexity` | `max_complexity: 21` (default 9) |
 | Cognitive < 22 | none native; Credo `Refactor.PerceivedComplexity` is a cyclomatic variant | `max_complexity: 21`. Not in the default config, so add it |
-| Halstead < 80 | `halstead_gate.py` (multimetric handles `.ex`) | per file |
+| Halstead < 80 | `halstead_gate.py` (multimetric handles `.ex`) | per file, advisory unless `--file-max` is set |
 | File < 500 / comments / suppressions | `loc_budget.py`, `comment_density.py`, `suppression_audit.py` | the audit counts `credo:disable` |
 | 100% coverage | excoveralls `minimum_coverage: 100` via `mix coveralls`, or built-in `test_coverage: [summary: [threshold: 100]]` | **line coverage only**: BEAM `cover` has no branch coverage. Say so in the report |
 | CRAP < 25 | no lizard support, so no script | follows from CCN ≤ 21 plus 100% coverage (CRAP = CCN at full coverage) |
@@ -183,7 +183,7 @@ Muter config `muter.conf.yml` (from `muter init`) has `executable`, `arguments`,
 |------|------|---------|
 | Cyclomatic < 22 | lizard / `complexity_gate.py` (clang-tidy has no cyclomatic check) | `--ccn-max 21` |
 | Cognitive < 22 | clang-tidy `readability-function-cognitive-complexity` | `Threshold: 21` (default 25; flags Total > Threshold) |
-| Function size, params, nesting | clang-tidy `readability-function-size` | `LineThreshold: 50` (physical lines, not NLOC), `ParameterThreshold: 5`, `NestingThreshold: 3`. All default to none except `StatementThreshold` 800 |
+| Function size, params, nesting | clang-tidy `readability-function-size` | `LineThreshold: 50` (physical lines, not NLOC), `ParameterThreshold: 5`, `NestingThreshold: 4` (the function body itself is level 1, so 4 allows three nested control blocks). All default to none except `StatementThreshold` 800 |
 | Halstead / file / comments / suppressions | `halstead_gate.py`, `loc_budget.py`, `comment_density.py`, `suppression_audit.py` | the audit counts `NOLINT`, and a bare `NOLINT` without `(check)` counts as blanket |
 | 100% line + branch | gcovr | `--fail-under-line 100 --fail-under-branch 100` (exit 2 / 4) |
 | CRAP < 25 | `complexity_gate.py --coverage build/coverage.xml` (gcovr `--cobertura`) | |
@@ -206,7 +206,7 @@ CheckOptions:
   readability-function-cognitive-complexity.Threshold: 21
   readability-function-size.LineThreshold: 50
   readability-function-size.ParameterThreshold: 5
-  readability-function-size.NestingThreshold: 3
+  readability-function-size.NestingThreshold: 4   # body = level 1, so this is nesting <= 3
 ```
 
 ```bash
@@ -222,8 +222,8 @@ python3 $S/complexity_gate.py src --coverage build/coverage.xml
 `--exclude-throw-branches` and `--exclude-unreachable-branches` drop compiler-generated
 exception branches that no test can reach. They are standard for C++, but list them as
 exclusions in the report. Coverage escape hatches are `GCOVR_EXCL_LINE`, `GCOVR_EXCL_START/STOP`
-and `GCOVR_EXCL_BR_*` (the `LCOV_` prefix also works). The audit counts `LCOV_EXCL`; grep for
-`GCOVR_EXCL`. With clang, `-fprofile-instr-generate -fcoverage-mapping` (+ `-fcoverage-mcdc`)
+and `GCOVR_EXCL_BR_*` (the `LCOV_` prefix also works). The audit counts both `LCOV_EXCL` and
+`GCOVR_EXCL` under `coverage`. With clang, `-fprofile-instr-generate -fcoverage-mapping` (+ `-fcoverage-mcdc`)
 and `llvm-cov export -format=lcov` replace gcov.
 
 Mull: compile tests with `clang-18 -fpass-plugin=/usr/lib/mull-ir-frontend-18 -g -grecord-command-line`,
@@ -239,7 +239,7 @@ The universal kit, for anything without a better native tool:
 |------|------|---------|
 | Cyclomatic, params, NLOC, CRAP | lizard via `complexity_gate.py` | `python3 $S/complexity_gate.py src --coverage <lcov or cobertura> --params-max 5 --nloc-max 50` |
 | Cognitive, nesting | lizard 1.24+ extensions | `lizard -Ecognitive -Tcognitive_complexity=21 -ENS -Tmax_nested_structures=3 -w src` (exit 1 on any warning; `-i N` tolerates N). `-ENS` is accurate for brace languages but over-counts indentation-based ones (Python, Elixir-style `do` blocks): use their native nesting rule there |
-| Halstead < 80 | multimetric via `halstead_gate.py` | per file for non-Python, using Pygments lexers (most languages) |
+| Halstead < 80 | multimetric via `halstead_gate.py` | per file for non-Python, using Pygments lexers (most languages); advisory unless you calibrate a per-file budget with `--file-max` |
 | File < 500 | `loc_budget.py` | `--ext` to restrict extensions |
 | Duplication | jscpd 5 (Rust rewrite, 200+ formats) | `npx --yes jscpd --threshold 0 --min-tokens 50 --format <fmt> src`. `threshold` fails when duplication % > value; markers `jscpd:ignore-start` / `jscpd:ignore-end` |
 | Any-type and invariant rules | semgrep (`semgrep scan --config .semgrep.yml --error`) or ast-grep (`ast-grep scan`, exit 1 on `severity: error`) | ast-grep supports Elixir, Swift and C++. Suppression comment: `// ast-grep-ignore: rule-id` |
