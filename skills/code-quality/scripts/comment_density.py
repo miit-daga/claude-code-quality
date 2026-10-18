@@ -5,8 +5,10 @@ Agent-written code tends to narrate itself ("# Loop over the items" above a
 for-loop). That noise costs reading time and goes stale. This script:
 
   1. FAILS when a file's comment-to-code ratio is above --max-ratio.
-  2. FAILS on likely narrating comments (comment words mostly restate the next
-     code line). --no-fail-on-narration turns this into a report only.
+  2. REPORTS likely narrating comments (comment words mostly restate the next
+     code line). The heuristic also catches some genuine "why" comments, and a
+     failing gate would push agents to delete good comments, so it only fails
+     with --fail-on-narration.
   3. FAILS on likely commented-out code. --no-fail-on-commented-code turns this
      into a report only.
 
@@ -19,7 +21,7 @@ one exists (ruff ERA001, sonarjs/no-commented-code); 2. and 3. are heuristics.
 
 Examples:
   python comment_density.py src
-  python comment_density.py . --max-ratio 0.15 --no-fail-on-narration   # legacy code: report narration only
+  python comment_density.py . --max-ratio 0.15 --no-fail-on-commented-code   # legacy code: report only
 
 Exit code 1 if any enabled check fails, 0 otherwise.
 """
@@ -63,7 +65,7 @@ DIRECTIVE = re.compile(
     r"webpackChunkName|prettier))"
 )
 CODE_LIKE = re.compile(
-    r"([{}]\s*$|^\s*(if|for|while|return|def|func|function|var|let|const|import|from|print|"
+    r"(\)\s*\{\s*$|^\s*[{}]\s*$|^\s*\}\s*else\b|^\s*(if|for|while|return|def|func|function|var|let|const|import|from|print|"
     r"console\.|fmt\.|puts|echo)\b.*[(=:]|^\s*\w+(\.\w+)*\s*=\s*\S|^\s*\w+(\.\w+)*\(.*\)\s*;?\s*$)"
 )
 # A trailing semicolon signals code only in C-family syntax; in # comments it is prose.
@@ -211,11 +213,12 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("paths", nargs="*", default=["."])
     ap.add_argument("--max-ratio", type=float, default=0.25, help="max comment lines per code line (default 0.25)")
     ap.add_argument("--min-code", type=int, default=20, help="ignore files with fewer code lines (default 20)")
-    ap.add_argument("--fail-on-narration", action=argparse.BooleanOptionalAction, default=True,
-                    help="fail on narrating comments (default: on)")
+    ap.add_argument("--fail-on-narration", action=argparse.BooleanOptionalAction, default=False,
+                    help="fail on narrating comments (default: off, report only)")
     ap.add_argument("--fail-on-commented-code", action=argparse.BooleanOptionalAction, default=True,
                     help="fail on commented-out code (default: on)")
-    ap.add_argument("--exclude", nargs="*", default=[], help="fnmatch globs on the relative path to skip")
+    ap.add_argument("--exclude", action="append", default=[], metavar="GLOB",
+                    help="fnmatch glob on the relative path to skip; repeat the flag for more")
     return ap.parse_args()
 
 

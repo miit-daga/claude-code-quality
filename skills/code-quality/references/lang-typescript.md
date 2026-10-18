@@ -135,6 +135,17 @@ export default defineConfig(
     },
   },
   {
+    // Boundary parsers may take raw input as an `unknown` parameter (SKILL.md gate 10). Only the
+    // parameter: an `unknown` return type, variable or `as unknown` cast still fails here.
+    files: ["src/boundary/**/*.ts"],
+    rules: {
+      "no-restricted-syntax": ["error", {
+        ...noUnknown,
+        selector: `TSUnknownKeyword:not(${[...CATCH_PARAM, ":function > Identifier > TSTypeAnnotation > TSUnknownKeyword"].join(", ")})`,
+      }],
+    },
+  },
+  {
     files: ["**/*.test.ts"],
     rules: {
       // A describe() callback is one function holding every it() as a statement, so neither
@@ -316,7 +327,7 @@ Per-file CSS byte budget: `python3 tools/quality/loc_budget.py src --max-bytes 2
   "typecov": "type-coverage",
   "test": "vitest run",
   "coverage": "vitest run --coverage",
-  "budgets": "python3 tools/quality/loc_budget.py src && python3 tools/quality/comment_density.py src --fail-on-commented-code && python3 tools/quality/suppression_audit.py src --zero coverage skipped any-type todo --baseline .quality/suppressions.json",
+  "budgets": "python3 tools/quality/loc_budget.py src && python3 tools/quality/comment_density.py src --fail-on-commented-code && python3 tools/quality/suppression_audit.py src --zero coverage skipped any-type todo --baseline .quality/suppressions.json --any-type-allow 'src/boundary/*'",
   "metrics": "uv run --no-project --with lizard --with multimetric python tools/quality/complexity_gate.py src --exclude '*.test.ts' --params-max 5 --nloc-max 50 && uv run --no-project --with radon --with multimetric python tools/quality/halstead_gate.py src --exclude '*.test.ts'",
   "crap": "uv run --no-project --with lizard python tools/quality/complexity_gate.py src --exclude '*.test.ts' --coverage coverage/lcov.info",
   "deadcode": "knip && knip --production --strict",
@@ -362,7 +373,7 @@ Jest writes the same `coverage/lcov.info` with `coverageReporters: ["lcov"]`. Th
 
 - **Compiler:** `strict` (includes `noImplicitAny` and `useUnknownInCatchVariables`), plus `noUncheckedIndexedAccess` and `exactOptionalPropertyTypes`.
 - **Linter:** `strictTypeChecked` turns on `no-explicit-any`, `no-unsafe-argument`/`-assignment`/`-call`/`-member-access`/`-return`, `no-non-null-assertion`, `no-unnecessary-type-parameters` and `no-unnecessary-condition`. On top of that, `no-restricted-syntax` bans the `unknown` keyword and `consistent-type-assertions: never` bans `as`. type-coverage `--strict` at 100% catches implicit `any` the linter misses.
-- **Boundary pattern:** don't write a function that takes `unknown`. Hand the raw value (`any` from `JSON.parse`, `await res.json()` or `req.body`) straight to the schema. `no-unsafe-argument` allows `any` into zod's `unknown` parameter, so nothing untyped survives the call.
+- **Boundary pattern:** preferably hand the raw value (`any` from `JSON.parse`, `await res.json()` or `req.body`) straight to the schema; `no-unsafe-argument` allows `any` into zod's `unknown` parameter, so nothing untyped survives the call. When you want a named parser instead, put it in `src/boundary/`, where the ESLint block above allows an `unknown` parameter (and only a parameter), and pass `--any-type-allow 'src/boundary/*'` to `suppression_audit.py`.
 
   ```ts
   import { z } from "zod";

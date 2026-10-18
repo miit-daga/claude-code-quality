@@ -62,7 +62,8 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--params-max", type=int, default=None, help="optional max parameters per function")
     ap.add_argument("--nloc-max", type=int, default=None, help="optional max non-comment lines per function")
     ap.add_argument("--coverage", default=None, help="coverage report (lcov / cobertura / jacoco / clover / go profile)")
-    ap.add_argument("--exclude", nargs="*", default=[], help="fnmatch globs on the relative path to skip")
+    ap.add_argument("--exclude", action="append", default=[], metavar="GLOB",
+                    help="fnmatch glob on the relative path to skip; repeat the flag for more")
     ap.add_argument("--top", type=int, default=0, help="also print the N functions with the highest CRAP (or CCN)")
     return ap.parse_args()
 

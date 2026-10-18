@@ -19,8 +19,9 @@ ts-ignore, a bare nolint) always fail unless --allow-blanket is given.
 
 Allowed by design (not counted): TS catch variables typed `unknown`, Python
 `import ... Any` lines, Go generic constraints, `equals(Object)` overrides, and
-any-type hits in boundary files passed to --any-type-allow (the schema parsers
-that receive raw input, e.g. --any-type-allow 'src/boundary/*').
+the untyped input *parameter* of functions in boundary files passed to
+--any-type-allow (the schema parsers that receive raw input, e.g.
+--any-type-allow 'src/boundary/*'); casts and other uses there still count.
 
 Modes:
   python suppression_audit.py src                          # report; fail on blanket only
@@ -55,10 +56,10 @@ CPP = {".c", ".h", ".cc", ".cpp", ".cxx", ".hpp"}
 EQUALS = r"\bequals\s*\("
 # `[T any]` is a generic constraint (anything is allowed by design), not an untyped value.
 # `unknown` is the correct type for a caught error: `catch (e: unknown)`, `.catch((e: unknown) => ...)`.
-TS_CATCH = r"catch\s*\(\s*\(?\s*\w+\s*:\s*unknown\b"
+TS_CATCH = r"catch\s*\(\s*\(?\s*\w+\s*:\s*unknown\b|\.then\([^,]*,\s*\(\s*\w+\s*:\s*unknown\b"
 # `from typing import Any` imports the name; only annotations that use it are escape hatches.
 PY_IMPORT = r"^\s*(from\s+\S+\s+)?import\b"
-GO_CONSTRAINT = r"\[[^\]()]*\s+any\s*[\],]"
+GO_CONSTRAINT = r"\[[^\]()]*\s+any\b[^\]()]*\]"
 
 
 @dataclass
@@ -72,6 +73,7 @@ class Marker:
     blanket: str | None = None
     code_only: bool = False
     unless: str | None = None  # skip lines matching this (legitimate uses of the pattern)
+    strip: str | None = None  # blank out spans matching this before searching (exempt spans only)
 
 
 MARKERS = [
@@ -140,9 +142,9 @@ MARKERS = [
     Marker("skipped", "phpunit skip", r"markTestSkipped\(|markTestIncomplete\(|->skip\(", {".php"}),
     # escape hatches from the type system
     Marker("any-type", "TS any", r"(:\s*|\bas\s+|<\s*|,\s*|\|\s*|=\s*)any\b(?!\s*[:(])", TS, code_only=True),
-    Marker("any-type", "TS unknown", r"(:\s*|\bas\s+|<\s*|,\s*|\|\s*)unknown\b", TS, code_only=True, unless=TS_CATCH),
+    Marker("any-type", "TS unknown", r"(:\s*|\bas\s+|<\s*|,\s*|\|\s*)unknown\b", TS, code_only=True, strip=TS_CATCH),
     Marker("any-type", "Python Any", r"(:\s*|->\s*|\[\s*|,\s*|\|\s*|typing\.)Any\b", PY, code_only=True, unless=PY_IMPORT),
-    Marker("any-type", "Go any/interface{}", r"\binterface\{\}|[\s\[\](*,]any\b", {".go"}, code_only=True, unless=GO_CONSTRAINT),
+    Marker("any-type", "Go any/interface{}", r"\binterface\{\}|[\s\[\](*,]any\b", {".go"}, code_only=True, strip=GO_CONSTRAINT),
     Marker("any-type", "C# dynamic", r"\bdynamic\b", {".cs"}, code_only=True),
     Marker("any-type", "Sorbet T.untyped/T.unsafe", r"T\.(untyped|unsafe)\b", RB, code_only=True),
     Marker("any-type", "RBS untyped", r"\buntyped\b", {".rbs"}, code_only=True),
@@ -174,6 +176,8 @@ def applies(marker: Marker, path: Path, line: str) -> bool:
         return False
     if marker.unless and re.search(marker.unless, line):
         return False
+    if marker.strip:
+        line = re.sub(marker.strip, " ", line)
     return re.search(marker.pattern, line) is not None
 
 
@@ -187,10 +191,19 @@ def scan(path: Path) -> list[Hit]:
     return hits
 
 
+# A function parameter typed as untyped input: `(raw: unknown)`, `(raw: Any)`, `func Parse(raw any)`.
+UNTYPED_PARAM = r"[(,]\s*\*?\w+\??\s*(:\s*|\s+)(unknown|any|Any|interface\{\}|mixed|dynamic|T\.untyped)\b"
+SIGNATURE = r"\b(def|function|func|fn)\b|=>"
+CAST = r"\bas\s+(any|unknown)\b|\bcast\(|<(any|unknown)>"
+
+
 def boundary_any(hit: Hit, globs: list[str]) -> bool:
-    """Untyped input is legitimate inside the boundary parsers named by --any-type-allow."""
-    posix = hit.path.as_posix()
-    return hit.marker.category == "any-type" and any(fnmatch.fnmatch(posix, g) for g in globs)
+    """In a boundary parser named by --any-type-allow, the raw input parameter may be untyped.
+    Only that is exempt: casts, return types and variables in the same file still count."""
+    if hit.marker.category != "any-type" or not any(fnmatch.fnmatch(hit.path.as_posix(), g) for g in globs):
+        return False
+    line = hit.text
+    return bool(re.search(SIGNATURE, line) and re.search(UNTYPED_PARAM, line) and not re.search(CAST, line))
 
 
 def counts(hits: list[Hit]) -> dict[str, int]:
@@ -214,11 +227,13 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--zero", nargs="*", default=[], help=f"categories that must have no hits at all: {CATEGORIES}")
     ap.add_argument("--baseline", help="JSON from --write-baseline; fail if any count grew")
     ap.add_argument("--write-baseline", help="write current counts to this JSON file and exit 0")
-    ap.add_argument("--any-type-allow", nargs="*", default=[],
-                    help="fnmatch globs for boundary files (schema parsers) where any-type hits are not counted")
+    ap.add_argument("--any-type-allow", action="append", default=[], metavar="GLOB",
+                    help="boundary files (schema parsers) whose function parameters may take untyped input; "
+                         "repeat the flag for more")
     ap.add_argument("--allow-blanket", action="store_true", help="do not fail on blanket suppressions")
     ap.add_argument("--list", nargs="*", default=[], help="print every hit in these categories")
-    ap.add_argument("--exclude", nargs="*", default=[], help="fnmatch globs on the relative path to skip")
+    ap.add_argument("--exclude", action="append", default=[], metavar="GLOB",
+                    help="fnmatch glob on the relative path to skip; repeat the flag for more")
     return ap.parse_args()
 
 

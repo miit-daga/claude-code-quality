@@ -69,7 +69,7 @@ rather than hard requirements:
 | Nesting depth | ≤ 3 | The main driver of cognitive complexity |
 | Boolean expression operators | ≤ 3 per condition | Name the condition instead |
 | CSS/JS byte budgets | per file and per bundle | When the budget is hit, have the agent prune before adding |
-| Comment density | ≤ 0.25 comment lines per code line, no narrating comments, no commented-out code | Agents narrate. Comments should explain *why* |
+| Comment density | ≤ 0.25 comment lines per code line, no commented-out code; narrating comments are reported for review, not failed (the heuristic also flags some good "why" comments) | Agents narrate. Comments should explain *why* |
 | Suppression ratchet | counts may only go down; no blanket suppressions | Stops gates being met by silencing them |
 | Type coverage | 100% | `type-coverage`, mypy any-exprs report, etc. |
 | Architecture boundaries | declared layers, no forbidden imports | import-linter, dependency-cruiser, ArchUnit, depguard, deptrac |
@@ -174,7 +174,8 @@ fixtures that should each fail exactly one gate, and confirm each gate fails:
 - a deeply nested function (cognitive), a 500-line file, a 6-parameter function
 - an uncovered branch, and a test that runs the code without asserting (mutation)
 - an unused export or function, a copy-pasted block, an `any`
-- a narrating comment, commented-out code, a blanket suppression
+- commented-out code and a blanket suppression (both must fail), and a narrating comment
+  (must appear in the comment report; narration is reported, not failed)
 
 Then delete the fixtures and confirm everything is green again. Run this through every
 layer you wired (hook, pre-commit, CI) at least once. Report which gates you proved

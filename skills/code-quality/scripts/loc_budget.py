@@ -9,7 +9,7 @@ Examples:
   python loc_budget.py src                       # files must be < 500 lines
   python loc_budget.py . --max-lines 399
   python loc_budget.py web --max-bytes 51200 --bytes-ext .css .js   # 50 KB per CSS/JS file
-  python loc_budget.py . --exclude '*/migrations/*' '*.generated.*'
+  python loc_budget.py . --exclude '*/migrations/*' --exclude '*.generated.*'
 
 Exit code 1 if any file is over budget, 0 otherwise.
 """
@@ -33,7 +33,8 @@ def parse_args() -> argparse.Namespace:
         "--bytes-ext", nargs="*", default=[".css", ".scss", ".js", ".mjs"], help="extensions the byte budget applies to"
     )
     ap.add_argument("--ext", nargs="*", default=None, help="only check these extensions (default: all known source extensions)")
-    ap.add_argument("--exclude", nargs="*", default=[], help="fnmatch globs on the relative path to skip")
+    ap.add_argument("--exclude", action="append", default=[], metavar="GLOB",
+                    help="fnmatch glob on the relative path to skip; repeat the flag for more")
     return ap.parse_args()
 
 

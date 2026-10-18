@@ -48,7 +48,8 @@ def parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("paths", nargs="*", default=["."])
     ap.add_argument("--max", type=float, default=80.0, help="difficulty must be strictly below this (default 80)")
-    ap.add_argument("--exclude", nargs="*", default=[], help="fnmatch globs on the relative path to skip")
+    ap.add_argument("--exclude", action="append", default=[], metavar="GLOB",
+                    help="fnmatch glob on the relative path to skip; repeat the flag for more")
     ap.add_argument("--file-max", type=float, default=None,
                     help="per-file budget for non-Python files; without it per-file scores are advisory")
     ap.add_argument("--top", type=int, default=0, help="also print the N highest scores")
