@@ -1,0 +1,16 @@
+{
+  "name": "miit-daga",
+  "description": "Claude Code plugins by Miit Daga",
+  "owner": {
+    "name": "Miit Daga",
+    "url": "https://github.com/miit-daga"
+  },
+  "plugins": [
+    {
+      "name": "code-quality",
+      "source": "./",
+      "description": "Strict quality gates for agent-written code, set up from day one and enforced by hooks, pre-commit and CI",
+      "category": "development"
+    }
+  ]
+}
