@@ -54,6 +54,41 @@ suppressions, skipped tests, splitting a function just to pass a metric, and edi
 the gate config itself. The last is enforced with Claude Code permission deny rules
 and a CI guard.
 
+## What this plugin does on your machine
+
+**Installing it does nothing on its own.** The plugin contains one skill and a few
+Python scripts. It has no hooks, no MCP servers, no background processes and no
+network access, and it never changes your user-level `~/.claude/settings.json`. The
+skill is manual-only, so it runs only when you invoke it.
+
+**When you run it on a project,** Claude first proposes a plan (the tools, the gates
+and the files involved) and asks for your approval. After you approve, it changes only
+that project:
+
+- **`.claude/settings.json` in the project** gets:
+  - two hooks: PostToolUse runs `.claude/hooks/lint-file.sh` on each file Claude edits,
+    and Stop runs `.claude/hooks/quality-gate.sh` before Claude finishes, so failing
+    gates are reported back to Claude
+  - permission **deny** rules that stop Claude from editing the gate configuration, for
+    example `Edit(/eslint.config.js)`, `Edit(/.claude/hooks/**)`,
+    `Edit(/tools/quality/**)`, and optionally running `git commit --no-verify`
+
+  These rules only restrict Claude in that project. They never grant extra permissions.
+- **Tooling:** linter, test and mutation-testing configs, a `quality` command, and dev
+  dependencies installed with the project's own package manager (from npm, PyPI, etc.)
+- **Scripts:** the bundled scripts are copied into the project's `tools/quality/`, so
+  CI and teammates can run them
+- **Git hooks:** set up through the project's pre-commit tool (lefthook, husky or
+  pre-commit). This can set `core.hooksPath` in the project's `.git/config`
+- **Other files:** a CI workflow file, plus `CLAUDE.md` / `AGENTS.md` and
+  `INVARIANTS.md`
+- **Test fixtures:** temporary files used to prove each gate fails, deleted afterwards
+
+The bundled scripts read the files you point them at, list files with `git ls-files`,
+and the Halstead script runs the locally installed `multimetric`. They make no network
+calls, send no data anywhere, and store nothing outside the project. Every change is an
+ordinary file in your project, so you can review it in the diff and revert it with git.
+
 ## Languages
 
 Python, Node.js / TypeScript, Go, Java / Kotlin, C# / .NET, Ruby / Rails (including
