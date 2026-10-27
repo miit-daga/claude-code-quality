@@ -1,12 +1,13 @@
 ---
 name: code-quality
 description: >-
-  Set up strict, machine-checked quality gates for a project from day one, so that AI agents
+  Set up machine-checked quality gates for a project from day one, so that AI agents
   cannot write slop into it: cyclomatic and cognitive complexity < 22, Halstead difficulty
-  < 80, files < 500 lines, 100% line and branch coverage, CRAP < 25, zero surviving mutants,
-  zero dead or duplicated code, zero any/unknown types, plus ABC size, CSS/JS size budgets,
-  comment-density limits, suppression ratchets, explicit invariants and (where warranted)
-  formal methods. Wires the gates into agent hooks, pre-commit and CI and writes the budgets
+  < 80, files < 500 lines, coverage >= 70% with mutation score >= 80% (or a Strict profile:
+  100% coverage, zero surviving mutants), CRAP < 25, zero dead or duplicated code, zero
+  any/unknown types, one sanctioned way to do service calls, retries and logging, plus
+  size budgets, comment limits, suppression ratchets, explicit invariants and (where
+  warranted) formal methods. Respects an existing org toolkit and lets the user choose tools. Wires the gates into agent hooks, pre-commit and CI and writes the budgets
   into the project's CLAUDE.md/AGENTS.md. Can also bring an existing codebase up to the same
   gates. Covers Python, Node/TypeScript, Go, Java/Kotlin, C#/.NET, Ruby/Rails, PHP, Rust,
   and other languages. Manual only: run when the user types /code-quality.
@@ -20,7 +21,7 @@ Do not start it on your own initiative, even if a task looks related.
 
 Agents optimise against whatever feedback loop they are given. A linter rule that
 would feel draconian to a human ("no function above complexity 21", "no file over
-500 lines", "every mutant must die") costs an agent nothing to obey and reliably
+500 lines", "tests must kill 80% of mutants") costs an agent nothing to obey and reliably
 steers it toward simpler, smaller, better-tested code. Telling an agent "this must pass
 the cyclomatic complexity lint" changes what it writes in the first place, not just
 what it fixes afterwards.
@@ -41,22 +42,39 @@ There are two paths:
 Either way, the gates matter more than any cleanup. A cleanup without gates rots back
 within weeks.
 
+**The org's toolkit comes first.** Many organisations already ship one: shared lint and
+format configs (an `@acme/eslint-config` package, a parent POM, a shared `.golangci.yml`),
+project and CI templates, a standard HTTP client or logger. When the project belongs to
+such an org, adopt the toolkit as the baseline and only add gates it lacks. Propose
+missing gates to the toolkit's owners instead of overriding it in one repo. This skill is
+most useful for personal projects and teams without a toolkit, and as a checklist of what
+a toolkit could cover.
+
+**Tool choices belong to the user or the org.** Several tools often do the same job (for
+Java formatting: the IDE default, google-java-format or palantir-java-format through
+Spotless; for Python: ruff or black plus isort). Don't pick silently. Present the options
+and let the user decide. When they want a researched comparison, use the
+`quality-tool-picker` skill, which checks the current options on the web.
+
 ## The gates
 
-Defaults the user asked for. Tighten freely; never loosen without the user's say-so.
+Two profiles. **Standard** is the default. **Strict** is opt-in, for libraries,
+safety-critical code or small core modules, and can apply to part of a repo (for example
+Strict for `payments/`, Standard elsewhere). Tighten freely; never loosen without the
+user's say-so.
 
-| # | Gate | Budget | Why it helps with agent code |
-|---|------|--------|------------------------------|
-| 1 | Cyclomatic complexity (per function) | < 22 | Caps the number of paths; forces decomposition instead of `if` pile-ups |
-| 2 | Cognitive complexity (per function) | < 22 | Penalises nesting and broken flow, which cyclomatic misses |
-| 3 | Halstead difficulty (per function) | < 80 | Catches dense, operator-heavy code that is short but hard to read. Gated per function where the tool supports it (Python); per-file scores (other languages) are advisory unless the project calibrates a per-file budget |
-| 4 | Lines per file | < 500 | Keeps every file loadable in one read, for humans and agents |
-| 5 | Test coverage (line **and** branch) | 100% | No unexecuted code. Exclusions only for provably unreachable lines, each listed with a reason |
-| 6 | CRAP per function | < 25 | Complexity × lack of coverage. Ranks what to test or simplify first |
-| 7 | Surviving mutants | 0 | Proves tests check behaviour, not just execute lines |
-| 8 | Dead code | 0 | Unused functions, exports, files, params, deps |
-| 9 | Redundant code | 0 | Copy-paste duplication, no-op wrappers, re-implemented stdlib |
-| 10 | `any` / `unknown` (and equivalents) | 0 | Untyped holes are where agents hide confusion. Two uses are allowed: catch variables, and the raw input of a schema parse in a designated boundary file |
+| # | Gate | Standard (default) | Strict | Why it helps with agent code |
+|---|------|--------------------|--------|------------------------------|
+| 1 | Cyclomatic complexity (per function) | < 22 | < 22 | Caps the number of paths; forces decomposition instead of `if` pile-ups |
+| 2 | Cognitive complexity (per function) | < 22 | < 22 | Penalises nesting and broken flow, which cyclomatic misses |
+| 3 | Halstead difficulty (per function) | < 80 | < 80 | Catches dense, operator-heavy code that is short but hard to read. Gated per function where the tool supports it (Python); per-file scores (other languages) are advisory unless the project calibrates a per-file budget |
+| 4 | Lines per file | < 500 | < 500 | Keeps every file loadable in one read, for humans and agents |
+| 5 | Test coverage (line **and** branch) | ≥ 70% | 100% | A floor, not a quality measure: coverage only shows code ran. Past ~70–80% extra tests are mostly toil, so the test-quality gate is mutation score |
+| 6 | CRAP per function | < 25 | < 25 | Complexity × lack of coverage. Below 100% coverage it keeps untested code simple |
+| 7 | Mutation score on covered, changed code | ≥ 80% | 0 survivors | Proves tests check behaviour, not just execute lines. Measured on covered code (`scripts/mutation_score.py` or the tool's covered-code option) so it doesn't repeat coverage |
+| 8 | Dead code | 0 | 0 | Unused functions, exports, files, params, deps |
+| 9 | Redundant code | 0 | 0 | Copy-paste duplication, no-op wrappers, re-implemented stdlib |
+| 10 | `any` / `unknown` (and equivalents) | 0 | 0 | Untyped holes are where agents hide confusion. Two uses are allowed: catch variables, and the raw input of a schema parse in a designated boundary file |
 
 **Extended gates ("what else").** Recommend these too, as suggested starting points
 rather than hard requirements:
@@ -64,7 +82,7 @@ rather than hard requirements:
 | Gate | Suggested budget | Notes |
 |------|------------------|-------|
 | ABC size (Assignments, Branches, Conditions) | ≤ 17 per method | Native in RuboCop and Credo. Elsewhere use lizard token count as a proxy |
-| Function length | ≤ 50 NLOC | Long functions are where agents append "one more case" |
+| Function length | ≤ 60 NLOC; ≤ 100 for Java, Kotlin, C# and PHP (Strict: ≤ 50) | Logging, null checks and builders make methods in verbose languages long without making them complex. Cyclomatic and cognitive complexity are the real guards; don't over-granulate to meet this one |
 | Parameters | ≤ 5 | Pushes toward parameter objects and fewer boolean flags |
 | Nesting depth | ≤ 3 | The main driver of cognitive complexity |
 | Boolean expression operators | ≤ 3 per condition | Name the condition instead |
@@ -77,6 +95,7 @@ rather than hard requirements:
 | No logic in tests | no `if`/loops in test bodies | Branching tests hide which case failed |
 | Diff size per change | e.g. ≤ 400 changed lines per PR | Keeps agent changes reviewable |
 | TODO/FIXME | 0 in main, or must reference an issue | Agents leave placeholders and move on |
+| Cross-cutting conventions | one sanctioned way each for service calls, retries, timeouts, logging and errors | Agents copy whichever pattern they saw last; see `references/cross-cutting.md` |
 
 Tools disagree on `>` vs `>=` and on how they count (Halstead especially). After
 configuring any threshold, **verify the boundary**: write a throwaway function that
@@ -84,12 +103,13 @@ sits exactly at the limit and one just over, and confirm only the second fails.
 
 ## Which gates for which project
 
-The full set is the default, and for a new project it costs least to adopt on day one.
-Ask the user only if the project is clearly one of the exceptions:
+The full set at the Standard profile is the default, and for a new project it costs
+least to adopt on day one. Ask the user only if the project is clearly one of the exceptions:
 
-- **Production service or library, new or existing**: the full set.
+- **Production service**: Standard. Strict for a small, critical core if the user wants it.
+- **Library or safety-critical code**: offer Strict.
 - **Prototype, research code, or notebooks**: a light subset only. Use complexity,
-  file size, dead code, duplication and types. Skip 100% coverage and mutation
+  file size, dead code, duplication and types. Skip coverage and mutation
   testing. For notebooks, apply the gates to the `.py` modules the notebook imports,
   not to the notebook itself.
 - **Generated code, vendored code, migrations, fixtures**: exclude them by path in
@@ -104,10 +124,19 @@ CI config). For anything not yet decided, ask the user: languages and frameworks
 package manager, test runner, CI provider, and whether there is a frontend (for the
 CSS/JS budgets). Open the matching language reference(s) from the table at the end.
 
+Then ask whether an **org toolkit** applies (shared config packages, a parent POM or
+Gradle convention plugin, CI templates, a standard HTTP client or logger). If it does,
+read it and treat it as fixed: plan only the gates it lacks.
+
 ### A2. Agree the plan
 
-Propose the gates (the full table above, plus any extended gates that fit), the dev
-dependencies to add, and the three enforcement layers. Get a yes before installing,
+Propose the profile (Standard unless the user wants Strict), the gates (the table
+above, plus any extended gates that fit), the dev dependencies to add, and the three
+enforcement layers. Where several tools could fill a slot (formatter and style guide,
+linter preset, mutation tool, HTTP client, retry library, logger), list the options with
+one line each and let the user choose, or offer the `quality-tool-picker` skill for a
+researched comparison. Also agree the cross-cutting conventions (one way to call other
+services, retry, time out, log and report errors; see `references/cross-cutting.md`). Get a yes before installing,
 because this adds dependencies, hooks and CI jobs. Mention the costs: mutation testing
 takes real CI time even when it runs only on changed code.
 
@@ -147,10 +176,13 @@ Add this section (adapted to the stack) to the project's `CLAUDE.md` and/or
 
 Every change must pass `make quality` before you say it is done.
 
-- Functions: cyclomatic < 22, cognitive < 22, Halstead difficulty < 80, ≤ 5 params, nesting ≤ 3
+- Functions: cyclomatic < 22, cognitive < 22, Halstead difficulty < 80, ≤ 5 params, nesting ≤ 3,
+  ≤ 60 lines (≤ 100 in Java/Kotlin/C#/PHP). Don't split a cohesive function just to get shorter
 - Files: < 500 lines. Split by responsibility, never by line count
-- Tests: 100% line and branch coverage, CRAP < 25, zero surviving mutants on changed code.
-  Every test asserts observable behaviour
+- Tests: ≥ 70% line and branch coverage, CRAP < 25, mutation score ≥ 80% on covered changed code
+  (Strict: 100% coverage, zero surviving mutants). Every test asserts observable behaviour
+- Service calls, retries, timeouts, logging and errors go through the modules named in
+  CONVENTIONS.md. Never hand-roll a client, a retry loop or a logger
 - Zero dead code, zero duplication, zero `any`/`unknown`. Exceptions: catch variables, and the raw
   input of a schema parse in a boundary file
 - Comments explain why, never what. No commented-out code, no TODOs without an issue link
@@ -162,7 +194,8 @@ Every change must pass `make quality` before you say it is done.
 ```
 
 Also create `INVARIANTS.md` with the invariants the user already knows (see
-"Invariants" below). It will grow as the project does.
+"Invariants" below), and `CONVENTIONS.md` with the agreed cross-cutting conventions
+(see `references/cross-cutting.md`). Both grow as the project does.
 
 ### A6. Prove the gates bite
 
@@ -172,7 +205,9 @@ fixtures that should each fail exactly one gate, and confirm each gate fails:
 - a function with cyclomatic complexity 22, and one at 21 that must pass (this checks
   the `>` vs `>=` boundary)
 - a deeply nested function (cognitive), a 500-line file, a 6-parameter function
-- an uncovered branch, and a test that runs the code without asserting (mutation)
+- untested code that drops coverage below the floor, and a test that runs code without
+  checking its result (the mutation score must fail)
+- a hand-rolled HTTP call or retry loop, and a raw logger call, outside the sanctioned modules
 - an unused export or function, a copy-pasted block, an `any`
 - commented-out code and a blanket suppression (both must fail), and a narrating comment
   (must appear in the comment report; narration is reported, not failed)
@@ -260,21 +295,26 @@ refactor code that has no tests pinning its behaviour.
 5. **Deduplicate.** Use jscpd or the language tool. Merge true duplicates. Leave
    coincidental similarity alone: two things that merely look alike today will
    change for different reasons.
-6. **Cut complexity and size.** Use the refactoring playbook below. Split files by
+6. **Converge cross-cutting code.** Inventory every way the codebase calls other
+   services, retries, logs and reports errors (`references/cross-cutting.md` has the
+   search patterns). Agree one way with the user, migrate module by module, then add
+   the lint rules that stop new divergence.
+7. **Cut complexity and size.** Use the refactoring playbook below. Split files by
    responsibility, not alphabetically or by line count.
-7. **Reach 100% coverage with meaningful tests.** Every test asserts an observable
-   outcome. No assertion-free tests, no testing mocks, no snapshot dumps of huge
-   objects as a coverage shortcut.
-8. **Kill every mutant.** Treat each survivor as one of three cases, checked in this
-   order:
+8. **Reach the coverage floor with meaningful tests** (≥ 70%, or 100% in Strict).
+   Every test asserts an observable outcome. No assertion-free tests, no testing mocks,
+   no snapshot dumps of huge objects as a coverage shortcut. Spend further effort on
+   mutation score, not on coverage.
+9. **Raise the mutation score** to the profile's budget (every mutant in Strict). Treat
+   each survivor as one of three cases, checked in this order:
    - **Redundant code.** The mutation changed nothing because the code does nothing,
      so delete it.
    - **Missing assertion.** Add or strengthen a test.
    - **Equivalent mutant.** The change genuinely can't alter behaviour. Mark it with
      the tool's skip annotation and give a reason. The suppression audit counts these.
-9. **CRAP follows.** With CCN < 22 and 100% coverage, CRAP equals CCN, so it is
-   automatically below 25. Use `complexity_gate.py --top 20` with a coverage report
-   to decide what to fix first in a legacy codebase.
+10. **Check CRAP.** Below 100% coverage it is a real gate: an untested function must
+   stay simple (CCN ≤ 4 at 0% coverage). Use `complexity_gate.py --top 20` with a
+   coverage report to decide what to test or simplify first.
 
 Commit after each step with all gates green, so any step can be reverted alone.
 
@@ -331,6 +371,10 @@ A gate is only worth something if passing it means the code got better. Do not:
   `_part2` functions that are only ever called in sequence, files split
   alphabetically, a function chopped in half at line 25. Each new unit needs a name
   that says what it is for.
+- **Over-granulate.** Five 12-line functions that only make sense read in sequence are
+  harder to follow than one cohesive 60-line function. Extract a piece only when it has
+  a meaningful name and is reused or worth testing on its own. Single responsibility is
+  a guide for modules and classes, not a reason to fragment every method.
 - **Squash lines to dodge the LOC budget.** The formatter is part of the gate.
 - **Replace `any` with an equally empty type**: `object` without narrowing,
   `Record<string, unknown>` passed around, `interface{}` renamed, `dynamic`,
@@ -378,6 +422,7 @@ packages, exit 1 on failure, and take `--exclude` globs. Run with `--help` for t
 | `scripts/complexity_gate.py` | cyclomatic **and cognitive** per function, params, NLOC, **CRAP** from lcov / Cobertura / JaCoCo / Clover / Go cover profiles | `lizard` ≥ 1.24 |
 | `scripts/halstead_gate.py` | Halstead difficulty: gated per function for Python; per file elsewhere, advisory unless `--file-max` is set | `radon`, `multimetric` |
 | `scripts/comment_density.py` | comment ratio, narrating comments, commented-out code | – |
+| `scripts/mutation_score.py` | mutation score from Stryker, PIT, mutmut, gremlins and cargo-mutants reports, on covered code (default ≥ 80%) or total; `--max-survived 0` for Strict | – |
 | `scripts/suppression_audit.py` | lint/coverage/mutation suppressions, skipped tests, any-types (catch variables and `--any-type-allow` boundary files exempt), TODOs; blanket check; ratchet baseline | – |
 
 Prefer a native tool when the language has a good one (for example ESLint `complexity`
@@ -394,6 +439,7 @@ Read the language file(s) for the stack in front of you, plus the others as need
 | `references/slop-catalog.md` | During cleanup step 2, or reviewing agent-written code |
 | `references/agent-loop.md` | Wiring hooks, pre-commit, CI, baselines and ratchets |
 | `references/invariants.md` | Defining or enforcing invariants; considering formal methods |
+| `references/cross-cutting.md` | Service calls, retries, timeouts, logging, errors: choosing one way and enforcing it |
 | `references/lang-python.md` | Python |
 | `references/lang-typescript.md` | Node.js / TypeScript / JavaScript, plus CSS and bundle budgets |
 | `references/lang-go.md` | Go |

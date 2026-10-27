@@ -6,6 +6,7 @@ coverage, fuzzing and `-race`. deadcode, go-test-coverage, gremlins, ast-grep an
 bundled scripts fill the gaps: Halstead, CRAP, mutation testing, the `any` ban,
 boolean-operator counts and file budgets. Facts below were checked against golangci-lint
 v2.15 (`.golangci.reference.yml`), gremlins v0.6.0 and the Go 1.25+ `go` command docs.
+Values are the Standard profile; Strict values are noted where they differ.
 
 ## Tool map
 
@@ -15,14 +16,14 @@ v2.15 (`.golangci.reference.yml`), gremlins v0.6.0 and the Go 1.25+ `go` command
 | Cognitive < 22 | golangci `gocognit` | `min-complexity: 21`. Reports `> 21` |
 | Halstead difficulty < 80 | no Go linter. `scripts/halstead_gate.py` (per file, via multimetric) | advisory by default (per-file scale); gate with a calibrated `--file-max`. `maintidx` (`under: 20`) uses Halstead volume but is a different metric |
 | File < 500 lines | revive `file-length-limit`; `scripts/loc_budget.py` | `max: 499`. Passes while `lines <= max` |
-| 100% coverage | `go test -coverprofile` + go-test-coverage | Statement coverage only: Go has **no branch coverage**. Gate file/package/total at 100. Optional condition coverage: `gobco` (third party; it prints `Condition coverage: X/Y`, so parse that and require X = Y; its exit status is unverified) |
+| Coverage ≥ 70% (Strict: 100%) | `go test -coverprofile` + go-test-coverage | Statement coverage only: Go has **no branch coverage**, so the gate is statements alone. `threshold.total: 70` (Strict: file/package/total 100). Optional condition coverage: `gobco` (third party; it prints `Condition coverage: X/Y`, so parse that and require X/Y ≥ 0.7, or X = Y in Strict; its exit status is unverified) |
 | CRAP < 25 | `scripts/complexity_gate.py --coverage cover.out` | reads Go cover profiles directly |
-| 0 surviving mutants | gremlins (`--diff`) + JSON gate; go-mutesting as fallback | see Mutation testing |
+| Mutation score ≥ 80% on covered changed code (Strict: 0 survivors) | gremlins (`--diff`) + `mutation_score.py`; go-mutesting as fallback | see Mutation testing |
 | 0 dead code | `unused` (standard set), `unparam`, revive `unused-parameter`/`unused-receiver`, `deadcode -test` | `unparam.check-exported: true` for applications, `false` for libraries with external importers |
 | 0 duplication | golangci `dupl`; `jscpd --format go` across the repo | `dupl.threshold: 100` (tokens; default 150) |
 | 0 `any` / `interface{}` | ast-grep rule `go-no-any` (below); revive `use-any` | No golangci linter bans the empty interface. forbidigo `^any$` matches the identifier but also flags `[T any]` constraints, and it never sees `interface{}` |
 | ABC ≤ 17 | none for Go | `complexity_gate.py` lizard token count is the only proxy |
-| Function ≤ 50 NLOC | `funlen`; `complexity_gate.py --nloc-max 50` | `lines: 50` (reports `> 50`, counts blank lines, skips comments by default) |
+| Function ≤ 60 NLOC (Strict: 50) | `funlen`; `complexity_gate.py --nloc-max 60` | `lines: 60` (reports `> 60`, counts blank lines, skips comments by default) |
 | Params ≤ 5 | revive `argument-limit`; `complexity_gate.py --params-max 5` | `arguments: [5]`, reports `> 5` |
 | Nesting ≤ 3 | revive `max-control-nesting`; `nestif` as a second signal | `arguments: [3]` (fires when nesting exceeds 3); `nestif.min-complexity: 5` reports `>= 5` |
 | Bool operators ≤ 3 | ast-grep rule `go-max-bool-ops` | no linter counts `&&`/`\|\|` |
@@ -32,6 +33,7 @@ v2.15 (`.golangci.reference.yml`), gremlins v0.6.0 and the Go 1.25+ `go` command
 | Unused deps | `go mod tidy -diff` | prints a diff and exits non-zero when go.mod/go.sum are not tidy |
 | No logic in tests / every test asserts | no linter | Table-driven `for _, tc := range` with `t.Run` and `if got != want { t.Errorf }` is idiomatic Go. Ban branching on `tc` fields in review. Mutation testing catches tests that assert nothing |
 | TODO ban | `godox` | `keywords: [TODO, FIXME, HACK, XXX, BUG]` |
+| One way for service calls, retries, logging, errors | forbidigo, depguard, sloglint, noctx, wrapcheck, ast-grep | see Cross-cutting conventions |
 
 ## Configuration
 
@@ -65,6 +67,11 @@ mkdir -p tools/quality .quality && cp <skill-dir>/scripts/*.py tools/quality/
 golangci-lint's docs recommend the binary install over `go install`/`go tool`. Run
 `golangci-lint config verify` after editing the config.
 
+**Formatter and preset are the org's or user's choice.** golangci-lint v2 formatters: `gofmt`,
+`gofumpt` (stricter), `goimports`, `gci` (import sections), `golines` (line length); below uses
+gofumpt + goimports. `linters.default` is `standard`, `all`, `fast` or `none`. An org's shared
+`.golangci.yml` wins; the `quality-tool-picker` skill gives a researched comparison.
+
 ### .golangci.yml
 
 ```yaml
@@ -77,7 +84,7 @@ linters:
   settings:
     gocyclo: { min-complexity: 21 }     # reports > 21
     gocognit: { min-complexity: 21 }    # reports > 21
-    funlen: { lines: 50, statements: -1, ignore-comments: true }   # -1 disables the statement count
+    funlen: { lines: 60, statements: -1, ignore-comments: true }   # Strict: 50. -1 disables the statement count
     nestif: { min-complexity: 5 }       # reports >= 5
     dupl: { threshold: 100 }            # tokens
     maintidx: { under: 20 }             # reports MI < 20
@@ -136,14 +143,14 @@ issues:
 
 ```yaml
 profile: cover.out
-threshold: { file: 100, package: 100, total: 100 }
+threshold: { total: 70 }        # Strict: { file: 100, package: 100, total: 100 }
 force-annotation-comment: true   # any `// coverage-ignore` must carry a reason
 exclude:
   paths: []                      # e.g. \.pb\.go$ for generated code; nothing hand-written
 ```
 
-Keep `main()` to one statement and test `run(...)`. If that single line is the only
-uncovered statement, either list `^cmd/app/main\.go$` under `exclude.paths` with a
+Keep `main()` to one statement and test `run(...)`. Under Strict, if that single line is the
+only uncovered statement, either list `^cmd/app/main\.go$` under `exclude.paths` with a
 comment, or cover it with a `go build -cover` binary run under `GOCOVERDIR` in an
 integration test.
 
@@ -194,7 +201,7 @@ quality-fast:
 	golangci-lint run ./...
 	.venv/bin/ast-grep scan
 	$(PY) $(S)/loc_budget.py $(SRC)
-	$(PY) $(S)/complexity_gate.py $(SRC) --params-max 5 --nloc-max 50
+	$(PY) $(S)/complexity_gate.py $(SRC) --params-max 5 --nloc-max 60   # Strict: 50
 	$(PY) $(S)/halstead_gate.py $(SRC)
 	$(PY) $(S)/comment_density.py $(SRC) --fail-on-commented-code
 	$(PY) $(S)/suppression_audit.py $(SRC) --zero coverage skipped any-type todo --baseline .quality/suppressions.json
@@ -206,7 +213,9 @@ quality: quality-fast
 	$(PY) $(S)/complexity_gate.py $(SRC) --coverage cover.out
 	out="$$(go tool deadcode -test ./...)"; [ -z "$$out" ] || { echo "$$out"; exit 1; }
 	go mod tidy -diff
-	bash $(S)/gremlins_gate.sh $(BASE)
+	rm -f gremlins.json && go tool gremlins unleash --diff $(BASE) --output gremlins.json
+	[ ! -f gremlins.json ] || $(PY) $(S)/mutation_score.py gremlins.json --min-covered 80
+	# Strict: replace the two lines above with `bash $(S)/gremlins_gate.sh $(BASE)`
 
 .PHONY: quality quality-fast
 ```
@@ -224,7 +233,7 @@ quality: quality-fast
 ```bash
 go test -covermode=atomic -coverpkg=./... -coverprofile=cover.out ./...
 python3 <skill-dir>/scripts/complexity_gate.py cmd internal --coverage cover.out
-go tool cover -func=cover.out | tail -1        # "total: (statements) 100.0%"
+go tool cover -func=cover.out | tail -1        # "total: (statements) 74.2%"
 go tool gocover-cobertura < cover.out > coverage.xml   # Cobertura for CI UIs, run from the go.mod dir
 ```
 
@@ -247,13 +256,18 @@ mutants:
   invert-loopctrl: { enabled: true }
 ```
 
-**Do not use `--threshold-efficacy 100` as the gate.** In v0.6.0 the check is
-`efficacy <= threshold`, so a perfect 100% still exits 10. Gate on the JSON instead.
-gremlins writes no file when the diff produced no mutants. `tools/quality/gremlins_gate.sh`:
+**Standard gate: covered score ≥ 80%.** gremlins' "test efficacy" is killed / (killed +
+lived), but v0.6.0 fails when `efficacy <= threshold`, so `--threshold-efficacy 80` fails at
+exactly 80% and `100` always fails (exit 10). The Makefile gates `gremlins.json` with
+`mutation_score.py --min-covered 80` instead (NOT COVERED is left to the coverage gate).
+gremlins writes no file when the diff has no mutants, hence the `[ ! -f gremlins.json ]` guard.
+
+**Strict gate: zero survivors.** `tools/quality/gremlins_gate.sh` fails on any LIVED or NOT
+COVERED mutant that is not in the equivalent-mutant list:
 
 ```bash
 #!/usr/bin/env bash
-# Fail if any mutant LIVED or was NOT COVERED, minus documented equivalent mutants.
+# Strict profile: fail if any mutant LIVED or was NOT COVERED, minus documented equivalent mutants.
 set -euo pipefail
 rm -f gremlins.json
 go tool gremlins unleash --diff "${1:-origin/main}" --output gremlins.json
@@ -278,7 +292,8 @@ nothing failed: add the assertion, or delete the code if the mutation changed no
 `NOT COVERED` means no test of that package executes it. gremlins runs only the mutated
 package's own tests (unless `--integration`), so cross-package coverage does not kill mutants.
 
-**Equivalent mutants.** gremlins has no inline skip comment. Record the mutant in
+**Equivalent mutants.** gremlins has no inline skip comment. Under Standard, an equivalent
+mutant counts against the 20% margin. Under Strict, record it in
 `.quality/equivalent-mutants.txt` exactly as the gate prints it, followed by `# reason`.
 Line and column move when the file changes, so the entry fails loudly instead of rotting.
 go-mutesting (avito-tech fork, `go install -v github.com/avito-tech/go-mutesting/...`) does
@@ -340,6 +355,63 @@ with real methods, or a sealed sum type (`//sumtype:decl` + gochecksumtype).
   `maps`, `cmp`, `strings.Cut` (staticcheck and gocritic point at many).
 - Tests with `time.Sleep` for synchronisation. Fix: channels, `testing/synctest` (Go 1.25+), or injected clocks.
 
+## Cross-cutting conventions
+
+One package per concern, and lint rules that reject every other way. The package names and
+libraries are examples; the org's toolkit or the user picks them (`cross-cutting.md`, or the
+`quality-tool-picker` skill for a comparison). Here: `internal/platform/httpclient` builds every
+`*http.Client` (timeouts, transport limits), `internal/platform/grpcclient` dials with interceptors
+and deadlines, `internal/platform/retry` is the only retry loop (e.g. wrapping `cenkalti/backoff`),
+logging is `log/slog` configured once in `main`, and errors are wrapped with `%w` at package
+boundaries (errorlint, wrapcheck) with package-level sentinels (err113). Merge into `.golangci.yml`:
+
+```yaml
+linters:
+  enable: [noctx, bodyclose, sloglint, wrapcheck, err113]   # plus the list above
+  settings:
+    forbidigo:
+      forbid:                                   # replaces the fmt.Print-only list above
+        - { pattern: '^(fmt\.Print.*|print|println)$', msg: use the slog logger }
+        - { pattern: '^log\.(Print|Fatal|Panic).*$', msg: use log/slog }
+        - { pattern: '^http\.(Get|Head|Post|PostForm|DefaultClient|DefaultTransport)$', msg: use internal/platform/httpclient }
+        - { pattern: '^grpc\.(NewClient|Dial|DialContext)$', msg: use internal/platform/grpcclient }
+    depguard:
+      rules:
+        one-logger:                             # add next to domain-is-pure and no-legacy
+          deny:
+            - { pkg: github.com/sirupsen/logrus, desc: use log/slog }
+            - { pkg: go.uber.org/zap, desc: use log/slog }
+            - { pkg: github.com/rs/zerolog, desc: use log/slog }
+        one-retry-helper:
+          files: ["$all", "!**/internal/platform/retry/**"]
+          deny: [{ pkg: github.com/cenkalti/backoff, desc: use internal/platform/retry }]
+    sloglint: { no-global: all, context: scope, key-naming-case: snake }
+  exclusions:
+    rules:
+      - { path: 'internal/platform/(httpclient|grpcclient)/', linters: [forbidigo] }
+```
+
+Two more rules for `.ast-grep/rules/go.yml` (tested with ast-grep 0.51: any `http.Client{...}`
+outside the package and `time.Sleep` inside a `for` fail; ignored paths pass):
+
+```yaml
+id: go-one-http-client
+language: go
+severity: error
+message: "Build HTTP clients only in internal/platform/httpclient, which sets timeouts."
+ignores: ["internal/platform/httpclient/**"]
+rule: { pattern: "http.Client{$$$}" }
+---
+id: go-no-hand-rolled-retry
+language: go
+severity: error
+message: "time.Sleep in a loop is a hand-rolled retry or poll. Use internal/platform/retry."
+ignores: ["internal/platform/retry/**"]
+rule:
+  pattern: { context: "func f() { time.Sleep($$$) }", selector: call_expression }
+  inside: { kind: for_statement, stopBy: end }
+```
+
 ## Invariants
 
 Ladder for Go, cheapest first:
@@ -380,8 +452,8 @@ Ladder for Go, cheapest first:
 
 - Lint only new issues: `golangci-lint run --new-from-merge-base=origin/main` (or
   `issues.new-from-merge-base` / `new-from-rev` in config; `--whole-files` widens to whole changed files).
-- Mutation on the diff: `gremlins unleash --diff origin/main` (the gate script above).
-- Coverage on the diff: `gocover-cobertura < cover.out > coverage.xml && diff-cover coverage.xml --compare-branch=origin/main --fail-under=100`.
+- Mutation on the diff: `gremlins unleash --diff origin/main`, scored by `mutation_score.py` (Strict: the gate script above).
+- Coverage on the diff: `gocover-cobertura < cover.out > coverage.xml && diff-cover coverage.xml --compare-branch=origin/main --fail-under=70` (Strict: 100).
 - Suppressions: `suppression_audit.py . --write-baseline .quality/suppressions.json`, then `--baseline` in CI.
 
 ## Pre-commit wiring
@@ -404,7 +476,7 @@ pre-commit:
       glob: "*.go"
       run: >-
         .venv/bin/python tools/quality/loc_budget.py {staged_files} &&
-        .venv/bin/python tools/quality/complexity_gate.py {staged_files} --params-max 5 --nloc-max 50
+        .venv/bin/python tools/quality/complexity_gate.py {staged_files} --params-max 5 --nloc-max 60
 pre-push:
   jobs:
     - name: quality-fast

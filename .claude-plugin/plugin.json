@@ -1,8 +1,8 @@
 {
   "name": "code-quality",
   "displayName": "Code Quality Gates",
-  "version": "1.1.0",
-  "description": "Strict, machine-checked quality gates for agent-written code from day one: complexity, Halstead, file size, 100% coverage, CRAP, mutation testing, dead and duplicated code, no any/unknown, invariants. Wires them into Claude Code hooks, pre-commit and CI. Manual-only skill.",
+  "version": "2.0.0",
+  "description": "Quality gates for agent-written code from day one (complexity, Halstead, file size, coverage floor, mutation score, CRAP, dead and duplicated code, no any/unknown, one way to call services, retry and log), with Standard and Strict profiles, plus a skill that researches and compares tool options. Respects an existing org toolkit. code-quality is manual-only.",
   "author": {
     "name": "Miit Daga",
     "url": "https://github.com/miit-daga"
@@ -10,5 +10,16 @@
   "homepage": "https://github.com/miit-daga/claude-code-quality",
   "repository": "https://github.com/miit-daga/claude-code-quality",
   "license": "MIT",
-  "keywords": ["code-quality", "linting", "complexity", "mutation-testing", "coverage", "ci", "pre-commit", "ai-slop"]
+  "keywords": [
+    "ai-slop",
+    "ci",
+    "code-quality",
+    "complexity",
+    "conventions",
+    "coverage",
+    "linting",
+    "mutation-testing",
+    "pre-commit",
+    "tooling"
+  ]
 }

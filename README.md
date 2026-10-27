@@ -1,8 +1,17 @@
-# code-quality: strict quality gates for agent-written code
+# code-quality: quality gates for agent-written code
 
-A [Claude Code](https://code.claude.com) skill that sets up strict quality gates on a
-project from day one, before the first feature is written. After that, every change
-Claude (or anyone else) makes has to pass them.
+A [Claude Code](https://code.claude.com) plugin with two skills:
+
+- **`code-quality`** sets up machine-checked quality gates on a project from day one,
+  before the first feature is written. After that, every change Claude (or anyone else)
+  makes has to pass them.
+- **`quality-tool-picker`** researches the current options for one tooling slot (a Java
+  formatter, a Python type checker, a retry library) on the web, compares them with
+  sources, and records the choice you make.
+
+It's most useful for personal projects and teams without an org-wide toolkit. If your
+org already ships shared lint configs, templates or standard libraries, the skill adopts
+those as the baseline and only adds what's missing.
 
 Coding agents optimise for whatever feedback loop they're given. A rule like "no
 function above cyclomatic complexity 21" or "every mutant must die" would be tiresome
@@ -12,21 +21,34 @@ in where an agent can't skip them.
 
 ## What it enforces
 
-| Gate | Budget |
-|---|---|
-| Cyclomatic complexity per function | < 22 |
-| Cognitive complexity per function | < 22 |
-| Halstead difficulty per function | < 80 (per-file scores outside Python are advisory unless you set a per-file budget) |
-| Lines per file | < 500 |
-| Test coverage (line **and** branch) | 100% |
-| CRAP per function | < 25 |
-| Surviving mutants | 0 |
-| Dead code | 0 |
-| Duplicated / redundant code | 0 |
-| `any` / `unknown` and equivalents | 0 (except catch variables and the raw input of a boundary schema parser) |
+There are two profiles. **Standard** is the default. **Strict** is opt-in, for libraries,
+safety-critical code or a critical core module.
 
-It also offers optional gates: ABC size, function length, parameter count, nesting
-depth, CSS/JS size budgets, comment density (no narrating or commented-out code), and a
+| Gate | Standard | Strict |
+|---|---|---|
+| Cyclomatic complexity per function | < 22 | < 22 |
+| Cognitive complexity per function | < 22 | < 22 |
+| Halstead difficulty per function | < 80 | < 80 |
+| Lines per file | < 500 | < 500 |
+| Test coverage (line **and** branch) | ≥ 70% | 100% |
+| CRAP per function | < 25 | < 25 |
+| Mutation score on covered, changed code | ≥ 80% | 0 surviving mutants |
+| Dead code | 0 | 0 |
+| Duplicated / redundant code | 0 | 0 |
+| `any` / `unknown` and equivalents | 0 (except catch variables and the raw input of a boundary schema parser) | same |
+
+Coverage is a floor, not a quality measure: it shows code ran, not that a test checked
+the result. Test quality is gated by the mutation score instead, measured on covered code
+so it doesn't repeat coverage. Per-file Halstead scores outside Python are advisory
+unless you set a per-file budget.
+
+**Cross-cutting conventions.** One sanctioned way each to call other services, retry,
+time out, log and report errors, enforced by lint and architecture rules, instead of a
+different pattern in every module.
+
+It also offers optional gates: ABC size, function length (≤ 60 lines, or ≤ 100 in
+Java, Kotlin, C# and PHP, where logging makes methods long without making them
+complex), parameter count, nesting depth, CSS/JS size budgets, comment density (no narrating or commented-out code), and a
 suppression ratchet that fails the build when `noqa` / `eslint-disable` /
 `pragma: no cover` / skipped tests increase. It writes the project's invariants to
 `INVARIANTS.md` and enforces each one with a type, a database constraint, a lint rule
@@ -84,6 +106,10 @@ that project:
   `INVARIANTS.md`
 - **Test fixtures:** temporary files used to prove each gate fails, deleted afterwards
 
+**`quality-tool-picker`** uses Claude Code's web search and fetch tools to research tool
+options, so the search queries (the tooling slot and your stack, such as "Java formatter
+Gradle 9") go to the web. It writes one decision record (`docs/adr/…`) after you choose.
+
 The bundled scripts read the files you point them at, list files with `git ls-files`,
 and the Halstead script runs the locally installed `multimetric`. They make no network
 calls, send no data anywhere, and store nothing outside the project. Every change is an
@@ -105,7 +131,8 @@ As a plugin (recommended):
 /plugin install code-quality@miit-daga
 ```
 
-Or as a personal skill: copy `skills/code-quality/` to `~/.claude/skills/code-quality/`.
+Or as personal skills: copy `skills/code-quality/` and `skills/quality-tool-picker/` into
+`~/.claude/skills/`.
 
 ## Use
 
@@ -122,6 +149,10 @@ For example:
 Set up the quality gates before we write any features.
 ```
 
+`quality-tool-picker` is not manual-only. Claude uses it when you ask to choose between
+tools, and `code-quality` hands tool choices to it instead of picking silently. It
+searches the web, so it needs Claude Code's web tools.
+
 ## Bundled scripts
 
 The scripts live in `skills/code-quality/scripts/`. They need Python 3.10+, plus
@@ -133,6 +164,7 @@ exits 1 on failure:
 | `loc_budget.py` | lines per file, and optional byte budgets for CSS/JS |
 | `complexity_gate.py` | cyclomatic and cognitive complexity per function, params, length, and **CRAP**. CRAP is computed from lcov, Cobertura, JaCoCo, Clover or Go coverage reports |
 | `halstead_gate.py` | Halstead difficulty |
+| `mutation_score.py` | mutation score from Stryker, PIT, mutmut, gremlins or cargo-mutants reports, on covered code or total |
 | `comment_density.py` | comment ratio, narrating comments, commented-out code |
 | `suppression_audit.py` | lint, coverage and mutation suppressions, skipped tests, `any`-style types and TODOs across languages, with a baseline that may only shrink |
 
@@ -141,7 +173,8 @@ have them.
 
 ## Evaluation
 
-The skill was compared with a baseline run without it on one task: "bootstrap a new
+Version 1.0 of the skill (whose defaults match today's Strict profile) was compared with
+a baseline run without it on one task: "bootstrap a new
 TypeScript API". A grader planted 10 violations in each resulting project and checked
 whether the project's own gates caught them:
 

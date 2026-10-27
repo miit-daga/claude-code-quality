@@ -3,9 +3,20 @@
 PHPStan at `level: max` with strict-rules, a cognitive-complexity extension and
 shipmonk's dead-code detector does most of the work. PHP_CodeSniffer and PHPMD add cyclomatic,
 nesting, length and parameter budgets. PHPUnit (under Xdebug) and a small Clover check cover
-100% line and branch coverage plus CRAP, Infection kills mutants, and jscpd, deptrac, Rector,
-PHP-CS-Fixer and the bundled scripts handle the rest. Versions checked: PHPStan 2.3, PHPMD 3.0,
+line and branch coverage plus CRAP, Infection measures mutation score, and jscpd, deptrac, Rector,
+a code-style fixer and the bundled scripts handle the rest. Versions checked: PHPStan 2.3, PHPMD 3.0,
 PHPUnit 12–13, Infection 0.35, Psalm 6.20, PHPCS 4.0, Slevomat 8.31.
+
+**Profiles.** Values below are Standard (the default): coverage ≥ 70% line and branch, mutation
+score ≥ 80% on covered changed code, functions ≤ 100 lines. Strict values (100% coverage, 0
+surviving mutants, ≤ 50 lines) appear as `Strict:` notes next to each setting.
+
+**Code style is the org's choice.** Ask the user, or follow the org toolkit (a shared ruleset
+package). Options: PHP-CS-Fixer (`@PER-CS` or `@PSR12` rule sets, many extra fixers) or
+PHP_CodeSniffer with `phpcbf` (built-in `PSR12` standard; PER-CS through a third-party standard).
+Laravel projects often use Pint, built on PHP-CS-Fixer (`pint --test` in CI). Pick one fixer
+for style; PHPCS can still run the metric sniffs below. For a researched comparison use the
+`quality-tool-picker` skill. The configs below show PHP-CS-Fixer with `@PER-CS` as one option.
 
 ## Tool map
 
@@ -15,14 +26,14 @@ PHPUnit 12–13, Infection 0.35, Psalm 6.20, PHPCS 4.0, Slevomat 8.31.
 | Cognitive < 22 | `tomasvotruba/cognitive-complexity` (PHPStan) | `cognitive_complexity.function: 21` (reported when > limit, despite the "keep it under" message) |
 | Halstead < 80 | `scripts/halstead_gate.py` (multimetric, per file) | advisory by default (per-file scale); gate with a calibrated `--file-max` |
 | File < 500 lines | `scripts/loc_budget.py` | default 499 physical lines |
-| 100% line + branch | PHPUnit + Xdebug path coverage → Clover → `tools/check_clover.py` | PHPUnit has no built-in fail-under. PCOV is line-only |
+| ≥ 70% line + branch (Strict: 100%) | PHPUnit + Xdebug path coverage → Clover → `tools/check_clover.py 70` | PHPUnit has no built-in fail-under. PCOV is line-only |
 | CRAP < 25 | the same Clover check (PHPUnit writes `crap` per method) and `scripts/complexity_gate.py --coverage build/clover.xml` | |
-| 0 surviving mutants | Infection | `--min-msi=100 --min-covered-msi=100` |
+| Mutation score ≥ 80% on covered changed code (Strict: 0 survivors) | Infection | `--min-covered-msi=80 --git-diff-lines` (covered MSI is native). Strict: `--min-msi=100 --min-covered-msi=100 --with-uncovered` |
 | 0 dead code | `shipmonk/dead-code-detector` (methods, constants, enum cases, properties; not whole classes) + PHPMD `unusedcode` | or Psalm `findUnusedCode` |
 | 0 duplication | jscpd (`phpcpd` is abandoned) | `threshold: 0`, `format: ["php"]` |
 | 0 `mixed` | PHPStan level 10 (`max`): errors on operations on explicit **and** implicit (missing-type) mixed | ban written `mixed`: `suppression_audit.py --zero any-type` |
 | ABC ≤ 17 | no PHP tool | rely on cognitive + Halstead; or lizard token count as proxy |
-| Function ≤ 50 NLOC | `SlevomatCodingStandard.Functions.FunctionLength` | `maxLinesLength` 50 (error when > max; `includeComments` / `includeWhitespace` decide what counts) |
+| Function ≤ 100 lines (Strict: 50) | `SlevomatCodingStandard.Functions.FunctionLength` | `maxLinesLength` 100 (error when > max; comments and blank lines excluded unless `includeComments` / `includeWhitespace`). PHPMD alternative: `ExcessiveMethodLength` 3.x `maximum` 100 (fires when >; counts all lines); 2.x `minimum` 101 (fires at >=) |
 | Params ≤ 5 | PHPMD `ExcessiveParameterList` | 3.x `maximum` 5 (2.x: `minimum` 6) |
 | Nesting ≤ 3 | PHPCS `Generic.Metrics.NestingLevel` | `absoluteNestingLevel` 3 (error when >) |
 | Boolean ops ≤ 3 | semgrep rule below | pure `&&` / `\|\|` chains; mixed chains raise cognitive complexity anyway |
@@ -75,7 +86,7 @@ parameters:
                 enabled: true           # code only called from tests counts as dead
 ```
 
-### phpcs.xml (metrics only; PHP-CS-Fixer owns style)
+### phpcs.xml (metrics only; the chosen fixer owns style)
 
 ```xml
 <?xml version="1.0"?>
@@ -83,7 +94,7 @@ parameters:
   <file>src</file> <file>tests</file> <arg name="extensions" value="php"/>
   <rule ref="Generic.Metrics.CyclomaticComplexity"><properties><property name="complexity" value="21"/><property name="absoluteComplexity" value="21"/></properties></rule>
   <rule ref="Generic.Metrics.NestingLevel"><properties><property name="nestingLevel" value="3"/><property name="absoluteNestingLevel" value="3"/></properties></rule>
-  <rule ref="SlevomatCodingStandard.Functions.FunctionLength"><properties><property name="maxLinesLength" value="50"/></properties></rule>
+  <rule ref="SlevomatCodingStandard.Functions.FunctionLength"><properties><property name="maxLinesLength" value="100"/></properties></rule> <!-- Strict: 50 -->
 </ruleset>
 ```
 
@@ -120,24 +131,30 @@ parameters:
 
 ```python
 #!/usr/bin/env python3
-"""Fail unless PHPUnit's Clover report shows 100% line and branch coverage and CRAP < 25 everywhere."""
+"""Usage: check_clover.py MIN_PERCENT [clover.xml]. Fails if line or branch coverage < MIN or any CRAP >= 25.
+Standard: 70. Strict: 100."""
 import sys
 import xml.etree.ElementTree as ET
 
-root = ET.parse(sys.argv[1] if len(sys.argv) > 1 else "build/clover.xml").getroot()
-m = root.find("project/metrics").attrib
-problems = [f"{k}: {m['covered' + k]}/{m[k]} covered" for k in ("statements", "conditionals") if m["covered" + k] != m[k]]
-if m["conditionals"] == "0":
+minimum = float(sys.argv[1])
+root = ET.parse(sys.argv[2] if len(sys.argv) > 2 else "build/clover.xml").getroot()
+m = {k: int(v) for k, v in root.find("project/metrics").attrib.items() if v.isdigit()}
+problems = []
+if m["conditionals"] == 0:
     problems.append("no branch data: run PHPUnit under Xdebug (XDEBUG_MODE=coverage) with --path-coverage")
+for k in ("statements", "conditionals"):
+    pct = 100.0 * m["covered" + k] / m[k] if m[k] else 100.0
+    if pct < minimum:
+        problems.append(f"{k}: {pct:.1f}% covered, need {minimum:g}%")
 for file in root.iter("file"):
     for line in file.iter("line"):
         if line.get("type") == "method" and float(line.get("crap", "0")) >= 25:
             problems.append(f"{file.get('name')}:{line.get('num')} {line.get('name')} CRAP {line.get('crap')}")
-print("\n".join(problems) or "clover: 100% lines and branches, CRAP < 25")
+print("\n".join(problems) or f"clover: lines and branches >= {minimum:g}%, CRAP < 25")
 sys.exit(1 if problems else 0)
 ```
 
-Pest projects can use `vendor/bin/pest --coverage --min=100` instead, but that threshold is a
+Pest projects can use `vendor/bin/pest --coverage --min=70` instead, but that threshold is a
 single line-coverage percentage. Keep the Clover check for branches and CRAP.
 
 ### rector.php and .php-cs-fixer.dist.php
@@ -152,7 +169,7 @@ return Rector\Config\RectorConfig::configure()
 ```
 
 ```php
-<?php // .php-cs-fixer.dist.php
+<?php // .php-cs-fixer.dist.php: one option (or Pint, or PHPCS + phpcbf with <rule ref="PSR12"/>)
 return (new PhpCsFixer\Config())
     ->setRiskyAllowed(true)  // declare_strict_types and strict_comparison are risky rules
     ->setRules(['@PER-CS' => true, 'declare_strict_types' => true, 'strict_comparison' => true, 'no_unused_imports' => true])
@@ -236,9 +253,10 @@ python3 "$S/comment_density.py" src --fail-on-commented-code
 python3 "$S/suppression_audit.py" src tests --zero coverage skipped any-type todo
 XDEBUG_MODE=coverage $B/phpunit --coverage-clover build/clover.xml \
   --coverage-xml build/coverage/coverage-xml --log-junit build/coverage/junit.xml
-python3 tools/check_clover.py build/clover.xml   # 100% lines + branches, PHPUnit CRAP < 25
+python3 tools/check_clover.py 70 build/clover.xml   # lines + branches >= 70% (Strict: 100), CRAP < 25
 python3 "$S/complexity_gate.py" src --coverage build/clover.xml   # lizard CCN + CRAP cross-check
-XDEBUG_MODE=coverage $B/infection --threads=max --min-msi=100 --min-covered-msi=100 --with-uncovered \
+# Strict: --min-msi=100 --min-covered-msi=100 --with-uncovered
+XDEBUG_MODE=coverage $B/infection --threads=max --min-covered-msi=80 --ignore-msi-with-no-mutations \
   --coverage=build/coverage --skip-initial-tests --git-diff-lines --git-diff-base="$BASE"
 ```
 
@@ -262,26 +280,34 @@ from PHPUnit's own CCN. `tools/check_clover.py` gates on that number, and lizard
     "source": { "directories": ["src"] },
     "logs": { "text": "build/infection.log", "html": "build/infection.html", "github": true },
     "mutators": { "@default": true },
-    "minMsi": 100,
-    "minCoveredMsi": 100,
+    "minCoveredMsi": 80,   // covered code only; no minMsi, so uncovered code is left to the coverage gate
+                           // Strict: "minMsi": 100, "minCoveredMsi": 100, plus --with-uncovered
     "timeout": 10,
 }
 ```
 
 - **Driver**: Xdebug, PCOV or phpdbg. `--coverage=build/coverage --skip-initial-tests` reuses
   the PHPUnit run (the directory needs both `coverage-xml/` and `junit.xml`).
-- **Changed code**: `--git-diff-lines --git-diff-base=origin/main` mutates changed lines only
-  (`--git-diff-filter=AM` mutates whole files). Run the full set nightly.
+- **Covered MSI is the gate.** It is killed ÷ covered mutants (timeouts and errors count as
+  killed), so it measures test strength without repeating coverage. Each MSI check is skipped
+  when unset, so with only `minCoveredMsi` set, uncovered code is left to the coverage gate.
+  A score exactly at the minimum passes.
+- **Changed code**: `--git-diff-lines --git-diff-base=origin/main` mutates changed lines only;
+  `--git-diff-filter=AM` mutates whole changed files. The two are mutually exclusive, and
+  `--git-diff-base` needs one of them. `--ignore-msi-with-no-mutations` keeps a change with no
+  mutable lines green. Run the full set nightly.
 - **Uncovered code**: since 0.31 it isn't mutated without `--with-uncovered` (which replaced
-  `--only-covered`). Pass the flag so `--min-msi=100` also catches untested code.
+  `--only-covered`). Standard leaves it off. Strict passes it with `--min-msi=100`, so untested
+  code also fails.
 - **Survivors**: `build/infection.log` holds a diff per escaped mutant. `--show-mutations=max`
-  prints them, and `logs.github` annotates the PR. Infection exits non-zero below either MSI.
+  prints them, and `logs.github` annotates the PR. Infection exits 1 below any configured MSI.
 - **Equivalent mutants**: `/** @infection-ignore-all */` on a class or method, or above a
   statement. Narrower: per-mutator `"ignore": ["App\\Money::round"]` or `"ignoreSourceCodeByRegex"`.
   State a reason. The audit counts `@infection-ignore`.
 - **Runtime**: only the covering tests run per mutant. Minutes for a library, much longer for a
   framework app, so use `--threads=max` and `--git-diff-lines` in CI.
-- **Pest**: Infection's schema no longer lists Pest. Use `pest --mutate --parallel --min=100`;
+- **Pest**: Infection's schema no longer lists Pest. Use `pest --mutate --parallel --min=80` (Strict: 100;
+  check whether your Pest version scores uncovered mutants);
   the audit counts its `@pest-mutate-ignore` marker under `mutation`.
 
 ## Killing untyped escape hatches
@@ -309,6 +335,51 @@ from PHPUnit's own CCN. `tools/check_clover.py` gates on that number, and lizard
 - Leftover `dd()`, `dump()`, `var_dump()`, `ray()`. Pest's `php` preset bans most of them; `dd`
   is only in the `laravel` preset.
 - Tests that mock the class under test, assert `assertTrue(true)`, or `sleep()`.
+
+## Cross-cutting conventions
+
+Agents copy whichever HTTP call, retry loop or logger they saw last. Agree one way for each with
+the user, record it in `CONVENTIONS.md` (see `cross-cutting.md`), then make every other way fail
+the build. Libraries are the org's choice; the names below are examples.
+
+| Concern | One sanctioned way (example) | Enforced by |
+|---------|------------------------------|-------------|
+| Service calls | one `App\Infrastructure\Http` namespace: Symfony `scoped_clients`, or Guzzle / Laravel `Http` wrappers, with `timeout` set there once | disallowed-calls + deptrac |
+| Retries | Symfony `RetryableHttpClient` (`retry_failed`), Guzzle `Middleware::retry`, or Laravel `Http::retry()`, configured in that namespace only | `sleep`/`usleep` banned elsewhere, so hand-rolled loops fail |
+| Logging | PSR-3 `LoggerInterface` injected, Monolog behind it with `JsonFormatter`; one processor (or Laravel `Context::add`) adds the correlation id | `error_log`, `var_dump`, `print_r` banned |
+| Errors | domain exceptions, mapped to HTTP once (a Symfony exception listener, Laravel `withExceptions`) | PHPMD `EmptyCatchBlock`; review |
+
+`composer require --dev spaze/phpstan-disallowed-calls` (extension-installer loads it). Add to
+`phpstan.neon`; paths are fnmatch globs from the working directory:
+
+```neon
+includes:
+    - vendor/spaze/phpstan-disallowed-calls/disallowed-dangerous-calls.neon  # var_dump, print_r, eval, ...
+parameters:
+    disallowedFunctionCalls:
+        - function: ['curl_*()', 'fsockopen()', 'sleep()', 'usleep()']
+          message: 'service calls and retries go through App\Infrastructure\Http (CONVENTIONS.md)'
+          allowIn: ['src/Infrastructure/Http/*']
+        - function: ['error_log()', 'dump()', 'dd()']
+          message: 'use the injected PSR-3 logger'
+    disallowedClasses:      # flags new, use imports, type hints and static calls
+        - class: ['GuzzleHttp\Client', 'Symfony\Component\HttpClient\HttpClient']
+          message: 'inject the client from App\Infrastructure\Http'
+          allowIn: ['src/Infrastructure/Http/*']
+```
+
+deptrac makes the vendor HTTP libraries reachable from one layer only. Add the layer to
+`deptrac.yaml` and list it under `Infrastructure` (`classLike`, not `class`, matches classes
+deptrac did not parse, such as vendor code):
+
+```yaml
+    - name: HttpVendor
+      collectors:
+        - { type: classLike, value: '^GuzzleHttp\\' }
+        - { type: classLike, value: '^Symfony\\(Component|Contracts)\\HttpClient\\' }
+  ruleset:
+    Infrastructure: [Domain, Application, HttpVendor]   # no other layer lists HttpVendor
+```
 
 ## Invariants
 
@@ -348,7 +419,7 @@ Path B only.
 - Psalm: `--set-baseline=psalm-baseline.xml`, then `--update-baseline` (it only removes
   entries). PHPMD: `--generate-baseline` (3.x writes `phpmd.baseline.xml`), then `--update-baseline`.
 - Changed-code coverage: `pip install diff-cover`, then `diff-cover build/cobertura.xml
-  --compare-branch=origin/main --fail-under=100` (PHPUnit `--coverage-cobertura`). Mutation:
+  --compare-branch=origin/main --fail-under=70` (Strict: 100) (PHPUnit `--coverage-cobertura`). Mutation:
   `--git-diff-lines`. Suppressions: `suppression_audit.py --write-baseline`, then `--baseline`.
 
 ## Pre-commit wiring
@@ -366,4 +437,4 @@ Path B only.
 
 Save it as `captainhook.json` and run `vendor/bin/captainhook install`. PHPStan's result cache
 keeps the hook fast. The alternative is GrumPHP (`phpro/grumphp`; `grumphp.yml` under
-`grumphp: tasks:` with `phpstan`, `phpcs`, `phpunit`, and `infection: { min_msi: 100, min_covered_msi: 100 }`).
+`grumphp: tasks:` with `phpstan`, `phpcs`, `phpunit`, and `infection: { min_covered_msi: 80 }`; Strict: `min_msi: 100, min_covered_msi: 100`).

@@ -11,7 +11,7 @@ or judge whether a fix improved the code or just moved the number.
 4. Lines per file (and function length)
 5. Coverage
 6. CRAP
-7. Mutation score / surviving mutants
+7. Mutation score
 8. Dead code
 9. Redundant code
 10. `any` / `unknown`
@@ -123,7 +123,12 @@ counter is that each module needs a responsibility you can state in one sentence
 
 **What:** line (statement) coverage = executed lines / executable lines. Branch coverage =
 taken branch outcomes / possible outcomes (both sides of every `if`, every `case`).
-Gate both at 100%. Line coverage alone misses the untaken `else`.
+Gate both, because line coverage alone misses the untaken `else`.
+
+**Budget:** Standard ≥ 70% line and branch; Strict 100%. Coverage only shows that code
+ran, not that anything checked the result, so past roughly 70–80% extra coverage is
+mostly toil. Treat it as a floor and measure test quality with the mutation score
+(section 7).
 
 Not every toolchain measures branches. Go's built-in coverage is statement-only, and
 Rust branch coverage via cargo-llvm-cov needs nightly. Where branches can't be
@@ -164,23 +169,28 @@ CC is cyclomatic complexity and cov is that method's coverage as a fraction.
 
 Bold = fails CRAP < 25. Two consequences:
 
-- With 100% coverage, CRAP = CC, so CC < 22 already implies CRAP < 25. CRAP adds
-  information only while coverage is below 100%: on a legacy codebase, or as a
-  ratchet during cleanup.
+- With 100% coverage (Strict), CRAP = CC, so CC < 22 already implies CRAP < 25. At
+  the Standard coverage floor CRAP does real work: it lets a project leave simple code
+  untested while forcing tests onto complex code.
 - Untested code may only be trivial: at 0% coverage, CC ≤ 4.
 
 Use `scripts/complexity_gate.py --coverage <report> --top 20` to rank functions by
 CRAP. That list is the order in which to add tests or simplify.
 
-## 7. Mutation testing (surviving mutants = 0)
+## 7. Mutation testing (mutation score)
 
 **What:** the tool makes small changes (mutants) to the code, such as `<` → `<=`,
 `+` → `-`, `True` → `False`, deleting a call, or returning a default value. It then
 re-runs the tests. If the tests still pass, the mutant *survived*: no test notices
 that behaviour.
 
-**Budget:** 0 surviving mutants on code under the gate (a mutation score of 100% of
-killable mutants). In practice, run on changed files per PR and on everything nightly.
+**Budget:** Standard: mutation score ≥ 80% on the covered part of changed code. Strict:
+0 surviving mutants. Measure on *covered* code (killed / (killed + survived)), because
+most tools count a mutant in untested code as not killed, which repeats what coverage
+already measures. `scripts/mutation_score.py` reads the reports of Stryker, PIT, mutmut,
+gremlins and cargo-mutants and computes both scores. PIT (`testStrengthThreshold`) and
+Infection (`--min-covered-msi`) have native covered-code options; mutant (Ruby) has none,
+so the Ruby reference scores its session file. Run on changed files per PR and on everything nightly.
 
 **Triage each survivor in this order:**
 1. **Redundant code?** If the mutation changed nothing observable because the code does

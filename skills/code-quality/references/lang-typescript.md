@@ -1,6 +1,8 @@
 # TypeScript / JavaScript gates
 
-`tsc` in strict mode and ESLint 10 (typescript-eslint v8 typed rules, eslint-plugin-sonarjs) carry the gates, Biome formats, Vitest with V8 coverage enforces 100%, and Stryker runs mutation testing. knip, jscpd, type-coverage and dependency-cruiser cover dead code, duplication, leftover `any` and layers, stylelint plus size-limit cover frontend budgets, and the bundled scripts cover Halstead, CRAP, comment density and suppressions. Everything here was run end to end on Node 25 with TypeScript 6.0, ESLint 10.13, typescript-eslint 8.71, sonarjs 4.2, Biome 2.5, Ultracite 8.0, Vitest 4.1, Stryker 10.0, knip 6.41, jscpd 5.4, dependency-cruiser 17.4, type-coverage 2.30, size-limit 14, stylelint 17 and lefthook 2.2.
+`tsc` in strict mode and ESLint 10 (typescript-eslint v8 typed rules, eslint-plugin-sonarjs) carry the gates, Biome formats, Vitest with V8 coverage enforces the coverage floor (70% line and branch; Strict 100%), and Stryker plus `mutation_score.py` gate the mutation score on covered, changed code (≥ 80%; Strict: zero survivors). knip, jscpd, type-coverage and dependency-cruiser cover dead code, duplication, leftover `any` and layers, stylelint plus size-limit cover frontend budgets, and the bundled scripts cover Halstead, CRAP, comment density and suppressions. Everything here was run end to end on Node 25 with TypeScript 6.0, ESLint 10.13, typescript-eslint 8.71, sonarjs 4.2, Biome 2.5, Ultracite 8.0, Vitest 4.1, Stryker 10.0, knip 6.41, jscpd 5.4, dependency-cruiser 17.4, type-coverage 2.30, size-limit 14, stylelint 17 and lefthook 2.2. The Standard-profile changes (coverage 70, function length 60, covered-code mutation score, cross-cutting bans) were rechecked with Vitest 4.1.12, Stryker 10.1, ESLint 10.13 and dependency-cruiser 17.4.
+
+**Tool choices are the org's or the user's.** Formatter: Biome, Prettier or dprint. Linter: ESLint with typescript-eslint (the presets below, or the org's shared config), or Biome/Ultracite or oxlint, which run faster but cover fewer of the gates in the tool map. Test runner: Vitest or Jest. The configs below use ESLint, Biome as formatter and Vitest; for a researched comparison use the `quality-tool-picker` skill.
 
 ## Tool map
 
@@ -10,14 +12,14 @@
 | Cognitive < 22 | `sonarjs/cognitive-complexity` | `["error", 21]`; fires when > 21. Biome: `noExcessiveCognitiveComplexity` `maxAllowedComplexity: 21`, same semantics |
 | Halstead difficulty < 80 | `scripts/halstead_gate.py` (multimetric, per file) | no maintained ESLint rule. Per-file scores are advisory by default; to gate them, calibrate a per-file budget and pass `--file-max` |
 | File < 500 lines | ESLint `max-lines` | `{ max: 499, skipBlankLines: false, skipComments: false }`. Biome: `style/noExcessiveLinesPerFile` `maxLines: 499` |
-| 100% line + branch coverage | Vitest + `@vitest/coverage-v8` | `thresholds: { 100: true, perFile: true }`, `coverage.include` so untested files count |
+| Coverage ≥ 70% line + branch | Vitest + `@vitest/coverage-v8` | `thresholds: { lines: 70, branches: 70 }` (global; add `perFile: true` to hold every file to it), `coverage.include` so untested files count. Strict: `{ 100: true, perFile: true }` |
 | CRAP < 25 | `scripts/complexity_gate.py --coverage coverage/lcov.info` | fails at ≥ 25 |
-| 0 surviving mutants | Stryker + vitest-runner + typescript-checker | `thresholds.break: 100`; exits 1 when the score < 100 (NoCoverage counts against it) |
+| Mutation score ≥ 80% on covered, changed code | Stryker + vitest-runner + typescript-checker, then `scripts/mutation_score.py` | `thresholds.break` compares the *total* score (NoCoverage counts as not killed), so leave it `null` and gate `reports/mutation/mutation.json` with `mutation_score.py --min-covered 80`. Strict: `--max-survived 0`, or `break: 100` |
 | 0 dead code | knip; `noUnusedLocals`/`noUnusedParameters` | run `knip` and then `knip --production --strict` (catches code used only by tests) |
 | 0 duplication | jscpd 5; `sonarjs/no-identical-functions` | `.jscpd.json` `threshold: 0` exits 1 on any clone |
 | 0 `any` / `unknown` | `@typescript-eslint/no-explicit-any`, `no-unsafe-*` (strictTypeChecked); `no-restricted-syntax` `TSUnknownKeyword`; `consistent-type-assertions: never` | plus type-coverage 100 |
 | ABC size ≤ 17 | none for TS | proxies: `complexity`, `max-lines-per-function`, `complexity_gate.py` |
-| Function ≤ 50 NLOC | ESLint `max-lines-per-function` | `{ max: 50, skipBlankLines: true, skipComments: true }`. Biome's `noExcessiveLinesPerFunction` counted 62 lines for a 94-line body, so don't use it as the gate |
+| Function ≤ 60 NLOC | ESLint `max-lines-per-function` | `{ max: 60, skipBlankLines: true, skipComments: true }` (Strict: 50). Biome's `noExcessiveLinesPerFunction` counted 62 lines for a 94-line body, so don't use it as the gate |
 | Params ≤ 5 | ESLint `max-params` | `{ max: 5 }`. Biome: `useMaxParams` `max: 5` |
 | Nesting ≤ 3 | ESLint `max-depth`, `max-nested-callbacks` | `{ max: 3 }` (4 in tests for describe > it > property > callback) |
 | Boolean operators ≤ 3 | `sonarjs/expression-complexity` | `{ max: 3 }` counts `&&`, `\|\|` and `?:` operators; 4 fails |
@@ -35,9 +37,10 @@
 
 ### Scaffold and install (empty repo)
 
-Two version traps, both verified:
+Three version traps, all verified:
 - typescript-eslint 8.71 declares `typescript >=4.8.4 <6.1.0`, but `npm i typescript` now installs 7.x. Pin `typescript@~6.0`.
 - With Vitest 5.0.5, `@stryker-mutator/vitest-runner` 10.0.0 reported every mutant as survived (a 4% score on a suite that scores 100% under Vitest 4.1). Pin `vitest` and `@vitest/coverage-v8` to the same exact 4.x version (each peer-depends on the other's exact version) until the runner supports 5.
+- dependency-cruiser 18 declares Node `^22||^24||>=26`. On Node 25, npm 11 fell back to 17.4.3, but pnpm installed 18 and it refused to run. Use an LTS Node or pin `dependency-cruiser@17.4`.
 
 ```bash
 git init && npm init -y && npm pkg set type=module
@@ -100,6 +103,12 @@ const noUnknown = {
   selector: `TSUnknownKeyword:not(${CATCH_PARAM.join(", ")})`,
   message: "No `unknown`. Pass raw input straight into a schema parse.",
 };
+// Cross-cutting conventions (see that section): a timer inside a loop is a hand-rolled retry or poll.
+const noHandRolledRetry = {
+  selector: ":matches(ForStatement, ForOfStatement, ForInStatement, WhileStatement, DoWhileStatement) CallExpression[callee.name='setTimeout']",
+  message: "Retry or poll through src/boundary/retry.ts, not a timer inside a loop.",
+};
+const viaHttp = "Call services through src/boundary/http.ts.";
 
 export default defineConfig(
   { ignores: ["dist/**", "coverage/**", "reports/**", ".stryker-tmp/**", "tools/**"] },
@@ -115,13 +124,15 @@ export default defineConfig(
       complexity: ["error", { max: 21 }],
       "sonarjs/cognitive-complexity": ["error", 21],
       "max-lines": ["error", { max: 499, skipBlankLines: false, skipComments: false }],
-      "max-lines-per-function": ["error", { max: 50, skipBlankLines: true, skipComments: true }],
+      "max-lines-per-function": ["error", { max: 60, skipBlankLines: true, skipComments: true }], // Strict: 50
       "max-params": ["error", { max: 5 }],
       "max-depth": ["error", { max: 3 }],
       "max-nested-callbacks": ["error", { max: 3 }],
       "sonarjs/expression-complexity": ["error", { max: 3 }],
       "@typescript-eslint/no-explicit-any": ["error", { fixToUnknown: false, ignoreRestArgs: false }],
-      "no-restricted-syntax": ["error", noUnknown],
+      "no-restricted-syntax": ["error", noUnknown, noHandRolledRetry],
+      "no-restricted-globals": ["error", { name: "fetch", message: viaHttp }],
+      "no-restricted-properties": ["error", { object: "globalThis", property: "fetch", message: viaHttp }],
       "@typescript-eslint/consistent-type-assertions": ["error", { assertionStyle: "never" }],
       "@typescript-eslint/ban-ts-comment": ["error", { "ts-expect-error": "allow-with-description", minimumDescriptionLength: 10 }],
       "@typescript-eslint/switch-exhaustiveness-check": "error",
@@ -142,9 +153,10 @@ export default defineConfig(
       "no-restricted-syntax": ["error", {
         ...noUnknown,
         selector: `TSUnknownKeyword:not(${[...CATCH_PARAM, ":function > Identifier > TSTypeAnnotation > TSUnknownKeyword"].join(", ")})`,
-      }],
+      }, noHandRolledRetry],
     },
   },
+  { files: ["src/boundary/http.ts"], rules: { "no-restricted-globals": "off", "no-restricted-properties": "off" } },
   {
     files: ["**/*.test.ts"],
     rules: {
@@ -205,13 +217,13 @@ export default defineConfig({
       include: ["src/**/*.ts"], // files no test imports still count, at 0%
       exclude: ["src/**/*.test.ts"],
       reporter: ["text", "lcov", "json-summary"],
-      thresholds: { 100: true, perFile: true },
+      thresholds: { lines: 70, branches: 70 }, // Strict: { 100: true, perFile: true }
     },
   },
 });
 ```
 
-For Jest, the equivalent is `coverageThreshold: { global: { branches: 100, functions: 100, lines: 100, statements: 100 } }`, `collectCoverageFrom: ["src/**/*.ts"]` and `coverageReporters: ["lcov", "text"]`, with `@stryker-mutator/jest-runner` (verify for your version).
+For Jest, the equivalent is `coverageThreshold: { global: { branches: 70, lines: 70 } }` (Strict: 100 for `branches`, `functions`, `lines` and `statements`), `collectCoverageFrom: ["src/**/*.ts"]` and `coverageReporters: ["lcov", "text"]`, with `@stryker-mutator/jest-runner` (verify for your version).
 
 ### stryker.config.json
 
@@ -226,11 +238,11 @@ For Jest, the equivalent is `coverageThreshold: { global: { branches: 100, funct
   "incremental": true,
   "incrementalFile": "reports/stryker-incremental.json",
   "reporters": ["clear-text", "progress", "html", "json"],
-  "thresholds": { "high": 100, "low": 100, "break": 100 }
+  "thresholds": { "high": 90, "low": 80, "break": null }
 }
 ```
 
-Use JSON rather than `stryker.config.mjs`. knip reports the JSDoc type import in the `.mjs` form as an unlisted dependency.
+The `json` reporter writes `reports/mutation/mutation.json`, which `mutation_score.py` gates. `break: null` (the default) keeps Stryker at exit 0 whatever the score, so the `mutation` script always reaches the gate. `high` and `low` only colour the report. Use JSON rather than `stryker.config.mjs`. knip reports the JSDoc type import in the `.mjs` form as an unlisted dependency.
 
 ### knip.json, .jscpd.json
 
@@ -328,12 +340,12 @@ Per-file CSS byte budget: `python3 tools/quality/loc_budget.py src --max-bytes 2
   "test": "vitest run",
   "coverage": "vitest run --coverage",
   "budgets": "python3 tools/quality/loc_budget.py src && python3 tools/quality/comment_density.py src --fail-on-commented-code && python3 tools/quality/suppression_audit.py src --zero coverage skipped any-type todo --baseline .quality/suppressions.json --any-type-allow 'src/boundary/*'",
-  "metrics": "uv run --no-project --with lizard --with multimetric python tools/quality/complexity_gate.py src --exclude '*.test.ts' --params-max 5 --nloc-max 50 && uv run --no-project --with radon --with multimetric python tools/quality/halstead_gate.py src --exclude '*.test.ts'",
+  "metrics": "uv run --no-project --with lizard --with multimetric python tools/quality/complexity_gate.py src --exclude '*.test.ts' --params-max 5 --nloc-max 60 && uv run --no-project --with radon --with multimetric python tools/quality/halstead_gate.py src --exclude '*.test.ts'",
   "crap": "uv run --no-project --with lizard python tools/quality/complexity_gate.py src --exclude '*.test.ts' --coverage coverage/lcov.info",
   "deadcode": "knip && knip --production --strict",
   "dupes": "jscpd",
   "arch": "depcruise src --config .dependency-cruiser.cjs",
-  "mutation": "stryker run",
+  "mutation": "stryker run && python3 tools/quality/mutation_score.py reports/mutation/mutation.json --min-covered 80",
   "quality:fast": "npm run format:check && npm run lint && npm run typecheck && npm run budgets && npm test",
   "quality": "npm run quality:fast && npm run typecov && npm run deadcode && npm run dupes && npm run arch && npm run coverage && npm run metrics && npm run crap && npm run mutation",
   "prepare": "lefthook install"
@@ -361,12 +373,13 @@ Jest writes the same `coverage/lcov.info` with `coverageReporters: ["lcov"]`. Th
   ```bash
   # :(glob) makes **/ match zero or more directories; plain 'src/**/*.ts' skips files directly in src/.
   CHANGED=$(git diff --name-only origin/main...HEAD -- ':(glob)src/**/*.ts' ':(glob,exclude)src/**/*.test.ts' | paste -sd, -)
-  [ -z "$CHANGED" ] || npx stryker run --mutate "$CHANGED"
+  [ -z "$CHANGED" ] || { npx stryker run --mutate "$CHANGED" && python3 tools/quality/mutation_score.py reports/mutation/mutation.json; }
   ```
 
+  With `incremental`, the report also carries the cached results of files outside `--mutate` (verified), so the score then covers every file in the incremental file, not only the diff. That suits a project gated from day one. In ratchet mode, give PR runs their own empty `--incrementalFile`.
 - **Read survivors:** the clear-text reporter prints each `[Survived]` mutant with its diff and the tests that covered it. `reports/mutation/mutation.html` is browsable. `reports/mutation/mutation.json` (mutation-testing-report-schema) has `files[path].mutants[]` with `status` (`Killed`, `Survived`, `NoCoverage`, `Timeout`, `CompileError`, `Ignored`).
 - **Equivalent mutant:** `// Stryker disable next-line all: <reason>` on the line above, or name the mutator: `// Stryker disable next-line ConditionalExpression: <reason>`. Ignored mutants are excluded from the score, and `suppression_audit.py` counts them.
-- **Fail CI:** `thresholds.break: 100` makes Stryker log "Final mutation score … under breaking threshold 100" and exit 1. NoCoverage mutants lower the score, so they fail too.
+- **Fail CI:** Stryker's `thresholds.break` reads only the total score (`mutationScore` in `mutation-test-report-helper.js`); there is no covered-code option, so `mutation_score.py` is the gate. Its default is killed / (killed + survived) ≥ 80%, with timeouts counted as killed and NoCoverage left to the coverage gate. The clear-text table shows the same split in its `total` and `covered` columns. Verified: a run at 26.7% total / 44.4% covered exits 0 from Stryker with `break: null`, then 1 from `mutation_score.py`. Strict: add `--max-survived 0`, or set `break: 100` (any NoCoverage mutant fails it too).
 - **Runtime:** `perTest` coverage runs only the covering tests per mutant. The sample's 28 mutants took about 6 s. Expect minutes for thousands of mutants, so run full runs nightly and changed files on PRs, and cache `reports/stryker-incremental.json` between CI runs.
 
 ## Killing `any` / `unknown`
@@ -399,6 +412,30 @@ Jest writes the same `coverage/lcov.info` with `coverageReporters: ["lcov"]`. Th
 - `switch` on a union without exhaustiveness: `switch-exhaustiveness-check`. Boolean flag params: split the function (and `max-params`).
 - Tests that snapshot whole objects to buy coverage, assert only `toBeDefined()`, mock the unit under test, or loop over cases: `sonarjs/assertions-in-tests`, the `it`/`test` branching ban, mutation testing.
 - Frontend: inline styles and one-off CSS classes per component, `!important`, ID selectors, deeply nested SCSS: stylelint rules above, plus `size-limit` so bundle growth is visible in every PR.
+
+## Cross-cutting conventions
+
+One sanctioned module per concern: `src/boundary/http.ts` for service calls and their timeouts, `src/boundary/retry.ts` for retries, `src/boundary/log.ts` for the structured logger. The libraries are the org's choice, for example native `fetch`, undici, ky or got; p-retry, cockatiel (retries plus circuit breakers) or opossum (circuit breaker); pino or winston. The `quality-tool-picker` skill compares them. Everything below was verified on ESLint 10.13 and dependency-cruiser 17.4.
+
+- **Who may import which library:** add these to `forbidden` in `.dependency-cruiser.cjs`. The pattern also matches pnpm's `node_modules/.pnpm/.../node_modules/<pkg>/` paths, and `node:timers/promises` resolves to the core module `timers/promises`, so `import { setTimeout as sleep } from "node:timers/promises"` is caught too.
+
+  ```js
+  const only = (name, file, libs) => ({
+    name, severity: "error", comment: `Only ${file} may import ${libs}`,
+    from: { pathNot: `^${file.replaceAll(".", "\\.")}$` },
+    to: { path: `(^|node_modules/)(${libs})(/|$)` },
+  });
+  // inside forbidden: [ ... ]
+  only("http-via-client", "src/boundary/http.ts", "axios|got|ky|undici|node-fetch"),
+  only("retry-via-helper", "src/boundary/retry.ts", "p-retry|cockatiel|opossum|timers/promises"),
+  only("log-via-logger", "src/boundary/log.ts", "pino|winston"),
+  ```
+
+  ESLint `no-restricted-imports` with `patterns: [{ group: ["axios", "ky"], message }]` gives the same bans in the editor, but a later config block replaces the rule's whole option list, so every exemption block would have to restate the other groups.
+- **Global `fetch`:** `no-restricted-globals` and `no-restricted-properties` in the ESLint config above ban `fetch(...)` and `globalThis.fetch(...)` outside `src/boundary/http.ts`. A frontend adds `{ object: "window", property: "fetch" }`.
+- **Timeouts:** no lint rule checks them, and defaults differ by client (axios: `timeout: 0`, meaning none; ky: 10 s; verify for your version). The http module sets one on every request, for example `signal: AbortSignal.timeout(ms)` with `fetch`, and a unit test pins it.
+- **Hand-rolled retry loops:** `noHandRolledRetry` flags `setTimeout` anywhere inside a loop, including `await new Promise((r) => setTimeout(r, ms))`. A later block replaces `no-restricted-syntax`'s options instead of merging them, which is why the `src/boundary` block repeats it (verified). If `retry.ts` writes its own loop instead of wrapping a library, that loop carries the one named suppression: `// eslint-disable-next-line no-restricted-syntax -- the sanctioned retry loop`.
+- **Logging:** `no-console` (above) plus the `log-via-logger` rule. pino and winston write through their own transports, so even `log.ts` needs no `console`.
 
 ## Invariants
 

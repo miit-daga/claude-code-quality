@@ -1,10 +1,11 @@
 # Ruby and Rails gates
 
 RuboCop (with rubocop-rspec, rubocop-rails and rubocop-sorbet) carries cyclomatic, perceived
-complexity, ABC size, length, parameter and nesting budgets; SimpleCov enforces 100% line and
-branch coverage; mutant kills mutants; Sorbet (or RBS + Steep) removes untyped holes; reek, spoom,
+complexity, ABC size, length, parameter and nesting budgets; SimpleCov enforces the coverage floor
+(70% line and branch; Strict 100%); mutant measures test strength (covered score ≥ 80% on changed
+subjects; Strict: every mutation killed); Sorbet (or RBS + Steep) removes untyped holes; reek, spoom,
 flay, jscpd, Herb and the bundled scripts cover smells, dead code, duplication, ERB and the rest.
-Versions checked: RuboCop 1.92, SimpleCov 1.3, mutant 0.17, rubocop-sorbet 0.17, Herb 0.11.
+Versions checked: RuboCop 1.92, SimpleCov 1.3, mutant 0.17.1, rubocop-sorbet 0.17, Herb 0.11.
 
 ## Tool map
 
@@ -14,14 +15,14 @@ Versions checked: RuboCop 1.92, SimpleCov 1.3, mutant 0.17, rubocop-sorbet 0.17,
 | Cognitive < 22 | RuboCop `Metrics/PerceivedComplexity` (closest analogue: counts `else`, weights `when`) | `Max: 21`. No native cognitive-complexity cop exists for Ruby |
 | Halstead < 80 | `scripts/halstead_gate.py` (multimetric, per file) | advisory by default (per-file scale); gate with a calibrated `--file-max` |
 | File < 500 lines | `scripts/loc_budget.py` | default 499. `Metrics/ClassLength`/`ModuleLength` count only code lines inside one class, so they are an early warning, not the gate |
-| 100% line + branch | SimpleCov | `enable_coverage :branch`, `minimum_coverage line: 100, branch: 100` |
+| Coverage ≥ 70% line + branch (Strict: 100%) | SimpleCov | `enable_coverage :branch`, `minimum_coverage line: 70, branch: 70` (Strict: 100 each) |
 | CRAP < 25 | `scripts/complexity_gate.py --coverage coverage/coverage.xml` | lizard's Ruby parser cuts some methods short (`case ... end`), so treat CRAP as triage and RuboCop as the CCN gate |
-| 0 surviving mutants | mutant (`mutant-rspec` / `mutant-minitest`) | `mutant run` exits non-zero on any alive mutation |
+| Mutation score ≥ 80% on covered changed code (Strict: 0 alive) | mutant (`mutant-rspec` / `mutant-minitest`) + `mutant_score.rb` | mutant has no score option and exits 1 on any alive mutation, which is the Strict gate. Standard scores its session file (see Mutation testing) |
 | 0 dead code | `spoom deadcode` (exits 1 on candidates); `debride` for a second opinion; RuboCop `Lint/UnusedMethodArgument`, `Lint/UselessAssignment`, `Lint/UselessMethodDefinition` | see Configuration |
 | 0 duplication | jscpd (`threshold: 0`) + flay (fail on `IDENTICAL`); RuboCop `Lint/DuplicateBranch`, `Lint/DuplicateMethods` | flay `--mass` default 16 |
 | 0 `T.untyped` | Sorbet `# typed: strict` + rubocop-sorbet `Sorbet/StrictSigil`, `Sorbet/ForbidTUntyped`, `Sorbet/ForbidTUnsafe`; or Steep with `D::Ruby.strict` | see "Killing untyped escape hatches" |
 | ABC ≤ 17 | `Metrics/AbcSize` | `Max: 17` (the RuboCop default) |
-| Function ≤ 50 NLOC | `Metrics/MethodLength` | `Max: 50`, `CountComments: false` |
+| Function ≤ 60 NLOC (Strict: 50) | `Metrics/MethodLength` | `Max: 60`, `CountComments: false` |
 | Params ≤ 5 | `Metrics/ParameterLists` | `Max: 5`, `CountKeywordArgs: true`, `MaxOptionalParameters: 3` |
 | Nesting ≤ 3 | `Metrics/BlockNesting` | `Max: 3` (counts `if`/`case`/loops/`rescue`; `CountBlocks: false` by default) |
 | Boolean ops ≤ 3 | semgrep rule `too-many-boolean-operators` below | catches pure `&&` or pure `\|\|` chains only; mixed chains still raise PerceivedComplexity |
@@ -34,6 +35,7 @@ Versions checked: RuboCop 1.92, SimpleCov 1.3, mutant 0.17, rubocop-sorbet 0.17,
 | ERB templates | Herb linter (`@herb-tools/linter`, binary `herb-lint`) or `erb_lint` | `--fail-level warning` |
 | Smells | reek (exit code 2 on smells) | `.reek.yml` below |
 | DB invariants (Rails) | `database_consistency`, `strong_migrations`, `Rails/SkipsModelValidations` | see Invariants |
+| One way for service calls, retries, logging, errors | semgrep rules, `Rails/Output`, `Style/RescueStandardError`, packwerk | see Cross-cutting conventions |
 
 ## Configuration
 
@@ -78,12 +80,12 @@ AllCops:
 Metrics/CyclomaticComplexity: { Enabled: true, Max: 21 }
 Metrics/PerceivedComplexity:  { Enabled: true, Max: 21 }
 Metrics/AbcSize:              { Enabled: true, Max: 17 }
-Metrics/MethodLength:         { Enabled: true, Max: 50, CountComments: false }
+Metrics/MethodLength:         { Enabled: true, Max: 60, CountComments: false }   # Strict: 50
 Metrics/ClassLength:          { Enabled: true, Max: 499 }   # early warning; loc_budget.py is the file gate
 Metrics/ModuleLength:         { Enabled: true, Max: 499 }
 Metrics/BlockNesting:         { Enabled: true, Max: 3 }
 Metrics/ParameterLists:       { Enabled: true, Max: 5, CountKeywordArgs: true, MaxOptionalParameters: 3 }
-Metrics/BlockLength:          { Enabled: true, Max: 50, AllowedMethods: [describe, context, shared_examples, refine] }
+Metrics/BlockLength:          { Enabled: true, Max: 60, AllowedMethods: [describe, context, shared_examples, refine] }   # Strict: 50
 Lint/DuplicateBranch:         { Enabled: true }
 Lint/MissingCopEnableDirective: { Enabled: true, MaxRangeSize: 0 }   # disables may cover one line only
 Style/DisableCopsWithinSourceCodeDirective:
@@ -93,6 +95,10 @@ Sorbet/StrictSigil:     { Enabled: true, Exclude: ["spec/**/*", "db/**/*", "bin/
 Sorbet/ForbidTUntyped:  { Enabled: true }
 Sorbet/ForbidTUnsafe:   { Enabled: true }
 ```
+
+**Style config and test framework are the org's or user's choice**: RuboCop with this file or an
+org gem (`inherit_gem`), Standard (standardrb), or the rubocop-shopify/rubocop-github presets; RSpec
+or Minitest (mutant supports both). The `quality-tool-picker` skill gives a researched comparison.
 
 **Standard (standardrb) projects.** Standard's `config/base.yml` sets every `Metrics/*` cop to
 `Enabled: false`, and neither `plugins` nor `extend_config` in `.standard.yml` can change a rule
@@ -112,7 +118,7 @@ require "simplecov-cobertura"
 SimpleCov.start do                          # Rails: SimpleCov.start "rails" do
   enable_coverage :branch                   # must come before minimum_coverage names :branch
   cover "{app,lib}/**/*.rb"                 # 1.x: also counts files no test ever loads
-  minimum_coverage line: 100, branch: 100   # suite exits non-zero (status 2) below either
+  minimum_coverage line: 70, branch: 70     # Strict: 100 each. Suite exits non-zero (status 2) below either
   formats :html, SimpleCov::Formatter::CoberturaFormatter   # writes coverage/coverage.xml
   deprecations :raise                       # 1.x: fail on legacy spellings
 end
@@ -120,13 +126,13 @@ end
 
 SimpleCov 0.22 has no `cover`, `formats` or `deprecations`: use `track_files "{app,lib}/**/*.rb"`
 and `SimpleCov.formatters = [SimpleCov::Formatter::HTMLFormatter, SimpleCov::Formatter::CoberturaFormatter]`.
-`SimpleCov.start "strict"` (1.x) is equivalent to 100% line, branch **and method** coverage.
+For Strict, `SimpleCov.start "strict"` (1.x) is equivalent to 100% line, branch **and method** coverage.
 
 ### .reek.yml
 
 ```yaml
 detectors:
-  TooManyStatements: { max_statements: 15 }   # default 5 fights the 50-line method budget
+  TooManyStatements: { max_statements: 15 }   # default 5 fights the 60-line method budget
   LongParameterList: { max_params: 5 }
   TooManyMethods:    { max_methods: 25 }
 exclude_paths: [vendor, db/migrate, spec]
@@ -221,14 +227,16 @@ python3 "$S/comment_density.py" "${SRC[@]}" --fail-on-commented-code
 # The audit counts `:nocov:`/`simplecov:disable` (coverage, held at zero), and `herb:disable` and
 # `safety_assured` (lint, ratcheted: each new one needs a reason and the user's approval).
 python3 "$S/suppression_audit.py" "${SRC[@]}" spec --zero coverage skipped any-type todo --baseline .quality/suppressions.json
-bundle exec rspec                              # 100% line + branch, writes coverage/coverage.xml
+bundle exec rspec                              # >= 70% line + branch, writes coverage/coverage.xml
 python3 "$S/complexity_gate.py" "${SRC[@]}" --coverage coverage/coverage.xml   # CRAP < 25
-bundle exec mutant run --since "$BASE"         # 0 alive mutations in changed subjects
+started=$(date +%s)
+bundle exec mutant run --since "$BASE" || true # exits 1 on any alive mutation; the next line is the gate
+ruby tools/quality/mutant_score.rb 80 "$started"   # covered score >= 80. Strict: drop `|| true` and this line
 ```
 
 `chmod +x bin/quality`. Each line exits non-zero on failure: RuboCop 1, reek 2, spoom 1,
-jscpd 1 (`threshold: 0`), semgrep 1 (`--error`), SimpleCov 2, mutant 1. flay always exits 0,
-hence the `grep` wrapper. Use `make quality` or a Rake task instead if the project has one.
+jscpd 1 (`threshold: 0`), semgrep 1 (`--error`), SimpleCov 2, mutant 1, `mutant_score.rb` 1.
+flay always exits 0, hence the `grep` wrapper. Use `make quality` or a Rake task instead if the project has one.
 
 ## Coverage report for CRAP
 
@@ -266,12 +274,36 @@ coverage_criteria:
   and per-worker DB isolation. The recipe is in mutant's `docs/rails.md`.
 - **Survivors**: each `evil:Subject#method:path:line:id` block diffs one unkilled mutation.
   `mutant session subject 'Foo#bar'` replays the last run's survivors without re-running.
-- **Equivalent mutants**: the only inline directive is `# mutant:disable` above a `def`, and it
+- **Equivalent mutants** (Standard absorbs a few in the 20% margin; Strict must mark each): the
+  only inline directive is `# mutant:disable` above a `def`, and it
   skips the *whole method*. Write the reason in the same comment. `mutation.ignore_patterns`
   (AST patterns, e.g. `send{selector=log}`) stops log calls being mutated. The audit counts `mutant:disable`.
 - **Runtime and CI**: one fork per mutation, `jobs` defaults to the CPU count. Expect minutes
   for a gem and much longer for a Rails app. mutant exits non-zero ("Uncovered mutations
-  detected") on any alive mutation, so no extra flag is needed.
+  detected") on any alive mutation, which is the Strict gate as it stands.
+- **Score gate (Standard)**: mutant has no minimum-score option (0.17.1 source: a run passes
+  only at 100%; `coverage_criteria` decides what counts as a kill; `--fail-fast` stops at the
+  first alive mutation). Each run is saved to `.mutant/results/<session-id>.json.gz` (schema in
+  mutant's `docs/session-json-schema.yml`), and the script below scores it, leaving subjects with
+  no selected tests to the coverage gate. `selection: { strategy: context_map }` (SimpleCov
+  `track_tests`) selects tests by per-test line coverage. Tested on synthetic session files with
+  Ruby 2.6 (80% passes, 70% fails, no new session fails); verify on a real run.
+
+```ruby
+# tools/quality/mutant_score.rb MIN [STARTED]: covered-code score from mutant's newest session file.
+require "json"
+require "zlib"
+min = Float(ARGV.fetch(0, "80"))
+path = Dir[".mutant/results/*.json{,.gz}"].max_by { |f| File.mtime(f) }
+abort "mutant_score: no session file from this run" if path.nil? || File.mtime(path).to_i < Integer(ARGV.fetch(1, "0"))
+raw = path.end_with?(".gz") ? Zlib::GzipReader.open(path, &:read) : File.read(path)
+subjects = JSON.parse(raw).fetch("subject_results").reject { |s| s.fetch("tests").empty? }
+results = subjects.flat_map { |s| s.fetch("coverage_results") }
+killed = results.count { |r| r.fetch("criteria_result").values.any? }
+score = results.empty? ? 100.0 : 100.0 * killed / results.size
+puts format("mutant: killed=%d alive=%d covered score=%.1f%% (min %g)", killed, results.size - killed, score, min)
+exit(score >= min ? 0 : 1)
+```
 
 ## Killing untyped escape hatches
 
@@ -304,6 +336,47 @@ coverage_criteria:
 - Tests that use `allow_any_instance_of`, stub the subject (`RSpec/SubjectStub`), assert
   `be_truthy` when the exact value is known, stack `let!` towers, or `sleep`.
 - YARD blocks that restate the signature.
+
+## Cross-cutting conventions
+
+One sanctioned place per concern; the libraries are examples and the org or the user picks them
+(`cross-cutting.md`, or the `quality-tool-picker` skill). Here: `app/clients/` holds one wrapper
+per service around a single Faraday connection builder that sets `request: { open_timeout:, timeout: }`
+and the faraday-retry middleware (`f.request :retry, max: 2, interval: 0.2, backoff_factor: 2`);
+logging is `Rails.logger` with a JSON formatter or rails_semantic_logger; errors subclass one
+`App::Error` tree and every `rescue` names a class. Append to `.semgrep.yml` (tested with semgrep
+1.182: each pattern below fails in `app/services/`, and the first two pass in `app/clients/`):
+
+```yaml
+  - id: one-http-client
+    languages: [ruby]
+    severity: ERROR
+    message: Call other services through app/clients (timeouts, retries and logging live there).
+    paths: { exclude: ["/app/clients/"] }
+    pattern-either:
+      - pattern: Net::HTTP.$M(...)
+      - pattern: Faraday.new(...)
+      - pattern: HTTParty.$M(...)
+      - pattern: URI.open(...)
+  - id: no-hand-rolled-retry
+    languages: [ruby]
+    severity: ERROR
+    message: Hand-rolled retry. Use the client's retry middleware or the shared retry helper.
+    paths: { exclude: ["/app/clients/"] }
+    pattern-either:
+      - pattern: "begin\n  ...\nrescue ...\n  ...\n  retry\nend"
+      - pattern: "def $M(...)\n  ...\nrescue ...\n  ...\n  retry\nend"
+      - patterns: [{ pattern: sleep(...) }, { pattern-inside: "loop do\n  ...\nend" }]
+  - id: one-logger
+    languages: [ruby]
+    severity: ERROR
+    message: Log through Rails.logger. No puts, pp or Logger.new in app code.
+    pattern-either: [{ pattern: puts(...) }, { pattern: pp(...) }, { pattern: Logger.new(...) }]
+```
+
+RuboCop backs this up with `Rails/Output` (on by default in `app/`, `config/`, `db/`, `lib/`),
+`Style/RescueStandardError` (`explicit`) and `Lint/SuppressedException: { AllowComments: false }`.
+With packwerk, make `app/clients` a pack so every caller must declare the dependency.
 
 ## Invariants
 
@@ -341,7 +414,7 @@ Path B only: gate new code fully and let old counts only fall.
 - `standardrb --generate-todo`, `reek --todo`, `database_consistency -g`, packwerk
   `enforce_dependencies: strict` + `package_todo.yml`: same rule, they only shrink.
 - SimpleCov 1.x: `simplecov ratchet` (per-file floors in `.simplecov_baseline.yml`) and
-  `simplecov patch --base origin/main --minimum 100` (changed lines). mutant: `--since origin/main`.
+  `simplecov patch --base origin/main --minimum 70` (changed lines; Strict: 100). mutant: `--since origin/main`.
 - `suppression_audit.py . --write-baseline .quality/suppressions.json`, then `--baseline` in CI.
 
 ## Pre-commit wiring

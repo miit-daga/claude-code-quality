@@ -9,7 +9,7 @@
     {
       "name": "code-quality",
       "source": "./",
-      "description": "Strict quality gates for agent-written code, set up from day one and enforced by hooks, pre-commit and CI",
+      "description": "Quality gates for agent-written code, set up from day one and enforced by hooks, pre-commit and CI, plus a tool-choice research skill",
       "category": "development"
     }
   ]

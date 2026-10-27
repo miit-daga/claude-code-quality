@@ -4,6 +4,10 @@ Java: PMD 7 + CPD for complexity, unused code and duplication, Checkstyle for si
 
 **Threshold semantics differ.** PMD reports at `>=` level (set level = budget + 1). Checkstyle reports at `>` max (set max = budget). detekt 1.23 reports at `>=` threshold (budget + 1); detekt 2.0 renames keys to `allowedXxx` and uses `>`. Prove each boundary with a 21/22 fixture (SKILL.md A6).
 
+**Profiles.** Values below are Standard (the default): coverage ≥ 70% line and branch, mutation score ≥ 80% on covered changed code, methods ≤ 100 lines. Strict values (100% coverage, 0 surviving mutants, ≤ 50 lines) appear as `Strict:` comments next to each setting.
+
+**Formatter and style are the org's choice.** Ask the user, or follow the org toolkit (a parent POM, a Gradle convention plugin, a shared `.editorconfig`). Common options: google-java-format (Google style, 2-space), palantir-java-format (120 columns, friendlier lambdas), an Eclipse formatter XML exported from the IDE, all three through Spotless; or keep the IDE formatter and enforce it with Checkstyle's `sun_checks`/`google_checks`. Kotlin: ktlint (official Kotlin style, configured through `.editorconfig`) or ktfmt (google-java-format-like, a few fixed styles), either one standalone or through Spotless. For a researched comparison use the `quality-tool-picker` skill. The configs below show google-java-format and ktlint as one option.
+
 ## Tool map
 
 | Gate | Tool (Java / Kotlin) | Setting / rule |
@@ -12,14 +16,14 @@ Java: PMD 7 + CPD for complexity, unused code and duplication, Checkstyle for si
 | Cognitive < 22 | PMD / detekt | `CognitiveComplexity` `reportLevel=22` / `CognitiveComplexMethod` `threshold: 22` (inactive by default) |
 | Halstead < 80 | none native | `scripts/halstead_gate.py` (per file, multimetric): advisory unless a calibrated `--file-max` is set |
 | File < 500 lines | Checkstyle / bundled script | `FileLength` `max=499` / `scripts/loc_budget.py` (detekt has no file-length rule) |
-| 100% line + branch | JaCoCo / Kover | `check`: LINE and BRANCH `COVEREDRATIO` 1.00 / `verify`: LINE and BRANCH bounds at 100 |
+| ≥ 70% line + branch (Strict: 100%) | JaCoCo / Kover | `check`: LINE and BRANCH `COVEREDRATIO` 0.70 / `verify`: LINE and BRANCH bounds at 70 |
 | CRAP < 25 | bundled script | `complexity_gate.py --coverage target/site/jacoco/jacoco.xml` / `build/reports/kover/report.xml` |
-| 0 surviving mutants | PIT / PIT + Arcmutate Kotlin plugin (commercial) | `maxSurviving=0`, not `mutationThreshold` (see Mutation testing) |
+| Mutation score ≥ 80% on covered changed code (Strict: 0 survivors) | PIT / PIT + Arcmutate Kotlin plugin (commercial) | `testStrengthThreshold=80` (covered code only), not `mutationThreshold`; Strict: `maxSurviving=0` (see Mutation testing) |
 | 0 dead code | PMD + Error Prone / detekt | `UnusedPrivateMethod`, `UnusedPrivateField`, `UnusedLocalVariable`, `UnusedFormalParameter`, `UnusedAssignment`, `UnnecessaryImport`, EP `UnusedVariable`/`UnusedMethod` / `UnusedPrivateMember`, `UnusedPrivateProperty`, `UnusedPrivateClass`, `UnusedParameter`, `UnusedImports` (enable) |
 | 0 duplication | PMD CPD / CPD or jscpd | `cpd-check` `minimumTokens=100` (Gradle `de.aaschmid.cpd`) / `language = "kotlin"` |
 | 0 `any`-style types | javac + Checkstyle + NullAway / kotlinc + detekt | `-Xlint:all -Werror` (rawtypes, unchecked), `IllegalType` bans `Object` / `allWarningsAsErrors` (UNCHECKED_CAST), `UnsafeCallOnNullableType` (`!!`), `UnsafeCast`, `CastToNullableType`; no rule for `Any` |
 | ABC ≤ 17 | none | `lizard -T token_count=<n>` as a proxy |
-| Function ≤ 50 NLOC | PMD + Checkstyle / detekt | `NcssCount` `methodReportLevel=51`; `MethodLength` `max=50` / `LongMethod` `threshold: 51` |
+| Method ≤ 100 lines (Strict: 50) | Checkstyle + PMD / detekt | `MethodLength` `max=100`; `NcssCount` `methodReportLevel=81` (statements, see the ruleset) / `LongMethod` `threshold: 101` |
 | Params ≤ 5 | PMD + Checkstyle / detekt | `ExcessiveParameterList` `minimum=6`; `ParameterNumber` `max=5` / `LongParameterList` `functionThreshold: 6` |
 | Nesting ≤ 3 | PMD + Checkstyle / detekt | `AvoidDeeplyNestedIfStmts` `problemDepth=4`; `NestedIfDepth` `max=2` (counts from 0) / `NestedBlockDepth` `threshold: 4` |
 | Boolean ops ≤ 3 | Checkstyle / detekt | `BooleanExpressionComplexity` `max=3` / `ComplexCondition` `threshold: 5` (counts operators + 1) |
@@ -52,7 +56,9 @@ src/test/java/com/example/ArchitectureTest.java
   <description>Quality budgets. PMD reports at value >= level, so level = budget + 1.</description>
   <rule ref="category/java/design.xml/CyclomaticComplexity"><properties><property name="methodReportLevel" value="22"/></properties></rule>
   <rule ref="category/java/design.xml/CognitiveComplexity"><properties><property name="reportLevel" value="22"/></properties></rule>
-  <rule ref="category/java/design.xml/NcssCount"><properties><property name="methodReportLevel" value="51"/></properties></rule>
+  <!-- NCSS counts statements and declarations, not lines: a 100-line method with logging is
+       typically 60-80 NCSS. 81 is a backstop; Checkstyle MethodLength is the line gate. Strict: 51 -->
+  <rule ref="category/java/design.xml/NcssCount"><properties><property name="methodReportLevel" value="81"/></properties></rule>
   <rule ref="category/java/design.xml/ExcessiveParameterList"><properties><property name="minimum" value="6"/></properties></rule>
   <!-- reports the if that sits at depth problemDepth, so 4 allows three nested ifs -->
   <rule ref="category/java/design.xml/AvoidDeeplyNestedIfStmts"><properties><property name="problemDepth" value="4"/></properties></rule>
@@ -93,7 +99,8 @@ src/test/java/com/example/ArchitectureTest.java
     <module name="SuppressWarningsHolder"/>
     <module name="CyclomaticComplexity"><property name="max" value="21"/></module>
     <module name="NPathComplexity"><property name="max" value="200"/></module>
-    <module name="MethodLength"><property name="max" value="50"/><property name="countEmpty" value="false"/></module>
+    <!-- Strict: 50. Logging and builders make Java methods long without making them complex -->
+    <module name="MethodLength"><property name="max" value="100"/><property name="countEmpty" value="false"/></module>
     <module name="ParameterNumber"><property name="max" value="5"/><property name="ignoreOverriddenMethods" value="true"/></module>
     <module name="BooleanExpressionComplexity"><property name="max" value="3"/></module>
     <module name="ClassFanOutComplexity"><property name="max" value="20"/></module>
@@ -150,6 +157,7 @@ src/test/java/com/example/ArchitectureTest.java
 </dependencies>
 <build><plugins>
   <plugin><groupId>com.diffplug.spotless</groupId><artifactId>spotless-maven-plugin</artifactId><version>3.10.4</version>
+    <!-- one option; or <palantirJavaFormat/>, or <eclipse><file>${project.basedir}/eclipse-formatter.xml</file></eclipse> -->
     <configuration><java><googleJavaFormat/></java></configuration>
     <executions><execution><phase>validate</phase><goals><goal>check</goal></goals></execution></executions></plugin>
   <plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-checkstyle-plugin</artifactId><version>3.6.0</version>
@@ -176,8 +184,8 @@ src/test/java/com/example/ArchitectureTest.java
       <execution><id>agent</id><goals><goal>prepare-agent</goal></goals></execution>
       <execution><id>report</id><phase>verify</phase><goals><goal>report</goal></goals></execution>
       <execution><id>check</id><goals><goal>check</goal></goals><configuration><rules><rule><element>BUNDLE</element><limits>
-        <limit><counter>LINE</counter><value>COVEREDRATIO</value><minimum>1.00</minimum></limit>
-        <limit><counter>BRANCH</counter><value>COVEREDRATIO</value><minimum>1.00</minimum></limit>
+        <limit><counter>LINE</counter><value>COVEREDRATIO</value><minimum>0.70</minimum></limit>   <!-- Strict: 1.00 -->
+        <limit><counter>BRANCH</counter><value>COVEREDRATIO</value><minimum>0.70</minimum></limit> <!-- Strict: 1.00 -->
       </limits></rule></rules></configuration></execution>
     </executions></plugin>
   <plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-pmd-plugin</artifactId><version>3.28.0</version>
@@ -198,7 +206,8 @@ src/test/java/com/example/ArchitectureTest.java
     <!-- No <targetClasses> here: PIT defaults to ${project.groupId}*, and a pom value would
          override -DtargetClasses, breaking the changed-classes-only run below. -->
     <configuration><mutators><mutator>STRONGER</mutator></mutators>
-      <maxSurviving>0</maxSurviving> <!-- counts SURVIVED + NO_COVERAGE -->
+      <testStrengthThreshold>80</testStrengthThreshold> <!-- detected / covered mutants; mutationThreshold stays 0 (off) -->
+      <!-- Strict: <maxSurviving>0</maxSurviving>, which counts SURVIVED + NO_COVERAGE -->
       <features><feature>+auto_threads</feature></features><outputFormats><param>XML</param><param>HTML</param></outputFormats>
       <timestampedReports>false</timestampedReports>
       <historyInputFile>${project.basedir}/.pitest/history.bin</historyInputFile><historyOutputFile>${project.basedir}/.pitest/history.bin</historyOutputFile></configuration>
@@ -247,7 +256,7 @@ tasks.withType<JavaCompile>().configureEach {
         option("NullAway:OnlyNullMarked", "true")
     }
 }
-spotless { java { googleJavaFormat() } }
+spotless { java { googleJavaFormat() } }   // one option; or palantirJavaFormat(), or eclipse().configFile("eclipse-formatter.xml")
 checkstyle { toolVersion = "14.3.0"; maxWarnings = 0 }      // reads config/checkstyle/checkstyle.xml
 pmd { toolVersion = "7.24.0"; ruleSets = listOf(); ruleSetFiles = files("config/pmd/ruleset.xml"); isConsoleOutput = true }
 cpd { minimumTokenCount = 100; toolVersion = "7.24.0" }      // Gradle 9.8 docs list PMD up to 7.24.0
@@ -255,8 +264,8 @@ tasks.test { useJUnitPlatform(); finalizedBy(tasks.jacocoTestReport) }
 tasks.jacocoTestReport { reports { xml.required = true } }   // build/reports/jacoco/test/jacocoTestReport.xml
 tasks.jacocoTestCoverageVerification {
     violationRules { rule {
-        limit { counter = "LINE"; minimum = "1.0".toBigDecimal() }
-        limit { counter = "BRANCH"; minimum = "1.0".toBigDecimal() }
+        limit { counter = "LINE"; minimum = "0.70".toBigDecimal() }    // Strict: 1.0
+        limit { counter = "BRANCH"; minimum = "0.70".toBigDecimal() }  // Strict: 1.0
     } }
 }
 tasks.check { dependsOn(tasks.jacocoTestCoverageVerification) } // not wired by default
@@ -265,7 +274,7 @@ pitest {
     junit5PluginVersion = "1.2.3"
     targetClasses = providers.gradleProperty("pitTargets").map { it.split(",").toSet() }.orElse(setOf("com.example.*"))
     mutators = setOf("STRONGER")
-    maxSurviving = 0
+    testStrengthThreshold = 80     // covered code only. Strict: maxSurviving = 0
     outputFormats = setOf("XML", "HTML")
     timestampedReports = false
     historyInputLocation = layout.projectDirectory.file(".pitest/history.bin")
@@ -287,11 +296,11 @@ plugins {
 kotlin { jvmToolchain(21); compilerOptions { allWarningsAsErrors = true; extraWarnings = true } }
 dependencies { testImplementation("com.lemonappdev:konsist:0.18.1"); testImplementation("net.jqwik:jqwik-kotlin:1.10.2") }
 detekt { buildUponDefaultConfig = true; config.setFrom("config/detekt/detekt.yml"); baseline = file("config/detekt/baseline.xml") }
-ktlint { version = "1.8.0" }
+ktlint { version = "1.8.0" }                  // one option; or Spotless `kotlin { ktfmt() }` instead of this plugin
 kover { reports {
     verify {
-        rule("line") { minBound(100) }
-        rule("branch") { bound { minValue = 100; coverageUnits = kotlinx.kover.gradle.plugin.dsl.CoverageUnit.BRANCH } }
+        rule("line") { minBound(70) }                  // Strict: 100
+        rule("branch") { bound { minValue = 70; coverageUnits = kotlinx.kover.gradle.plugin.dsl.CoverageUnit.BRANCH } }
     }
 } }                                                    // total koverVerify runs on `check`
 tasks.named<de.aaschmid.gradle.plugins.cpd.Cpd>("cpdCheck") {
@@ -307,7 +316,7 @@ config: { validation: true, warningsAsErrors: true }
 complexity:
   CyclomaticComplexMethod: { active: true, threshold: 22 }
   CognitiveComplexMethod: { active: true, threshold: 22 }
-  LongMethod: { active: true, threshold: 51 }            # counts lines with code tokens only
+  LongMethod: { active: true, threshold: 101 }           # lines with code tokens only; Strict: 51
   LongParameterList: { active: true, functionThreshold: 6, constructorThreshold: 6 }
   NestedBlockDepth: { active: true, threshold: 4 }
   ComplexCondition: { active: true, threshold: 5 }       # count = (&& + ||) + 1, so 5 allows 3 operators
@@ -334,15 +343,16 @@ quality-fast:
 	python3 $(S)/comment_density.py src --fail-on-commented-code
 	# any-type skips equals(Object o) / equals(other: Any?) lines; IllegalType also covers Java
 	python3 $(S)/suppression_audit.py src --zero coverage skipped any-type todo --baseline .quality/suppressions.json
-	python3 $(S)/complexity_gate.py $(SRC) --params-max 5 --nloc-max 50
+	python3 $(S)/complexity_gate.py $(SRC) --params-max 5 --nloc-max 100   # Strict: 50
 	python3 $(S)/halstead_gate.py $(SRC)
 quality: quality-fast
 	./mvnw -B verify             # -Werror + Error Prone + NullAway, tests, JaCoCo, PMD, CPD, unused deps, PIT
 	python3 $(S)/complexity_gate.py $(SRC) --coverage target/site/jacoco/jacoco.xml
+	python3 $(S)/mutation_score.py target/pit-reports/mutations.xml --min-covered 80   # Strict: --max-survived 0
 .PHONY: quality quality-fast
 ```
 
-Gradle: `quality-fast` runs `./gradlew -q spotlessCheck checkstyleMain checkstyleTest` (Kotlin: `ktlintCheck detekt`), and `quality` runs `./gradlew pmdMain pmdTest cpdCheck test jacocoTestCoverageVerification buildHealth pitest` (Kotlin: `detektMain detektTest cpdCheck test koverVerify koverXmlReport buildHealth pitest`; only `detektMain`/`detektTest` run type-resolution rules such as `!!`). In ratchet mode add `--baseline .quality/suppressions.json` to the audit line.
+Gradle: `quality-fast` runs `./gradlew -q spotlessCheck checkstyleMain checkstyleTest` (Kotlin: `ktlintCheck detekt`), and `quality` runs `./gradlew pmdMain pmdTest cpdCheck test jacocoTestCoverageVerification buildHealth pitest` (Kotlin: `detektMain detektTest cpdCheck test koverVerify koverXmlReport buildHealth pitest`), then `python3 $(S)/mutation_score.py build/reports/pitest/mutations.xml --min-covered 80`. Only `detektMain`/`detektTest` run type-resolution rules such as `!!` and `ForbiddenMethodCall`. With ktfmt through Spotless, `spotlessCheck` replaces `ktlintCheck`. In ratchet mode add `--baseline .quality/suppressions.json` to the audit line.
 
 ## Coverage report for CRAP
 
@@ -354,7 +364,8 @@ Then `python <skill-dir>/scripts/complexity_gate.py src/main/java --coverage tar
 
 ## Mutation testing
 
-- **Fail on any survivor with `maxSurviving=0`.** `mutationThreshold` is an integer percentage that rounds by default (`thresholdPrecision=0`), so `mutationThreshold=100` passes at 99.6%. `maxSurviving` counts total minus detected, so NO_COVERAGE mutants count too.
+- **Gate on test strength, not PIT's mutation score.** PIT's `mutationThreshold` divides by all mutants, so NO_COVERAGE ones count against it and it repeats the coverage gate. `testStrengthThreshold` (PIT 1.6.1+, gradle-pitest-plugin 1.6.0+) is detected ÷ mutants with coverage, which is the covered-code score. Leave `mutationThreshold`, `coverageThreshold` (default 0) and `maxSurviving` (default -1) unset so they cannot fail the build first. Thresholds are integer percentages unless `thresholdPrecision` (Maven, 1.25.4+) is raised. PIT also counts memory errors, run errors and non-viable mutants as detected. `mutation_score.py` (in the Makefile above) reads `mutations.xml`, counts only kills and timeouts and excludes the rest, so it is a stricter cross-check on the same run (Gradle report: `build/reports/pitest/mutations.xml`; both need `XML` in `outputFormats`).
+- **Strict:** `maxSurviving=0` fails on any survivor. It counts total minus detected, so NO_COVERAGE mutants count too. Do not use `mutationThreshold=100`: it rounds (`thresholdPrecision=0`), so 99.6% passes.
 - **Incremental:** `historyInputFile`/`historyOutputFile` (Gradle `historyInputLocation`/`historyOutputLocation`, or `enableDefaultIncrementalAnalysis = true`) reuse earlier results; cache `.pitest/` in CI. `scmMutationCoverage` was removed from pitest-maven (warned in 1.17.1), so restrict to changed classes yourself:
   ```bash
   T=$(git diff --name-only origin/main...HEAD -- 'src/main/java/*.java' | sed -e 's#src/main/java/##' -e 's#\.java$#*#' -e 's#/#.#g' | paste -sd, -)
@@ -367,7 +378,7 @@ Then `python <skill-dir>/scripts/complexity_gate.py src/main/java --coverage tar
   @Retention(RetentionPolicy.CLASS) @Target({ElementType.METHOD, ElementType.TYPE})
   public @interface DoNotMutate { String reason(); }
   ```
-- **Kotlin:** stock PIT mutates compiler-generated bytecode (null-check intrinsics, coroutine state machines, `when` on sealed types, inlined code), producing junk survivors. The Arcmutate plugin (`pitest("com.arcmutate:pitest-kotlin-plugin:<ver>")`, licence file `arcmutate-licence.txt`) filters them. Without it, 0 survivors is not realistic; tell the user before promising the gate.
+- **Kotlin:** stock PIT mutates compiler-generated bytecode (null-check intrinsics, coroutine state machines, `when` on sealed types, inlined code), producing junk survivors. The Arcmutate plugin (`pitest("com.arcmutate:pitest-kotlin-plugin:<ver>")`, licence file `arcmutate-licence.txt`) filters them. Without it, expect junk survivors that drag the score down (and make Strict's 0 survivors unrealistic); tell the user before promising the gate.
 - **Runtime:** roughly (number of mutants) × (tests covering each), so whole-project runs take minutes to hours. Run changed classes in pre-push/PR and a full run nightly.
 
 ## Killing untyped escape hatches
@@ -387,6 +398,59 @@ Then `python <skill-dir>/scripts/complexity_gate.py src/main/java --coverage tar
 - Defensive `Objects.requireNonNull` on every parameter of `@NullMarked` code: NullAway already proves it.
 - Kotlin: `?.let { } ?: run { }` chains, `!!` after a null check, `companion object` holding unrelated helpers, `data class` with `var`s, `runBlocking` inside suspend code.
 - Mockito-heavy tests that verify call order instead of outcomes: assert on returned values or state.
+
+## Cross-cutting conventions
+
+Agents copy whichever HTTP call, retry loop or logger they saw last. Agree one way for each with the user, record it in `CONVENTIONS.md` (see `cross-cutting.md`), then make every other way fail the build. Libraries are the org's choice; the names below are examples.
+
+| Concern | One sanctioned way (example) | Enforced by |
+|---|---|---|
+| Service calls (HTTP/gRPC) | one `..client..` package: `RestClient`/`WebClient` beans or a gRPC stub wrapper, built once with connect and read timeouts (gRPC: a deadline per call) | ArchUnit: no other package touches the raw clients |
+| Retries | one policy: Resilience4j `Retry` (`resilience4j-spring-boot3`), or Spring Framework 7 `@Retryable` / `RetryTemplate` (the separate Spring Retry project is archived) | ArchUnit bans `Thread.sleep` outside `..client..`, so hand-rolled retry loops fail |
+| Logging | SLF4J only; Micrometer Tracing puts `traceId`/`spanId` in the MDC; any extra key (`MDC.put("tenantId", …)`) is named once | ArchUnit `GeneralCodingRules`; Checkstyle `IllegalImport` |
+| Errors | domain exceptions mapped once (`@RestControllerAdvice` returning `ProblemDetail`) | ArchUnit `NO_CLASSES_SHOULD_THROW_GENERIC_EXCEPTIONS` |
+
+```java
+@AnalyzeClasses(packages = "com.example", importOptions = ImportOption.DoNotIncludeTests.class)
+class ConventionsTest {
+  @ArchTest static final ArchRule callsOnlyInClient = noClasses()
+      .that().resideOutsideOfPackage("..client..")
+      .should().dependOnClassesThat().resideInAnyPackage("java.net.http..", "org.springframework.web.client..",
+          "org.springframework.web.reactive.function.client..", "okhttp3..", "io.grpc..")
+      .because("CONVENTIONS.md: service calls go through com.example.client");
+  @ArchTest static final ArchRule noHandRolledRetry = noClasses()
+      .that().resideOutsideOfPackage("..client..")
+      .should().callMethod(Thread.class, "sleep", long.class)
+      .because("CONVENTIONS.md: retries use the shared policy");
+  @ArchTest static final ArchRule noJul = GeneralCodingRules.NO_CLASSES_SHOULD_USE_JAVA_UTIL_LOGGING;
+  @ArchTest static final ArchRule noStdStreams = GeneralCodingRules.NO_CLASSES_SHOULD_ACCESS_STANDARD_STREAMS;
+  @ArchTest static final ArchRule noGenericThrow = GeneralCodingRules.NO_CLASSES_SHOULD_THROW_GENERIC_EXCEPTIONS;
+}
+```
+
+Checkstyle flags the same imports in the editor. `IllegalImport` goes inside `TreeWalker` (setting `illegalPkgs` drops its `sun` default); `SuppressionSingleFilter` goes directly under `Checker`:
+
+```xml
+<module name="IllegalImport">
+  <property name="illegalPkgs" value="sun, java.util.logging, org.apache.log4j, org.apache.commons.logging"/>
+  <property name="illegalClasses" value="java.net.http.HttpClient, org.springframework.web.client.RestTemplate"/>
+</module>
+<module name="SuppressionSingleFilter"> <!-- the client package may use the HTTP classes -->
+  <property name="files" value="[\\/]client[\\/]"/><property name="checks" value="IllegalImport"/>
+</module>
+```
+
+Kotlin (detekt 1.23; `ForbiddenMethodCall` needs type resolution, so it runs only in `detektMain`):
+
+```yaml
+style:
+  ForbiddenImport: { active: true, imports: [ { value: 'java.util.logging.*', reason: 'Use SLF4J' } ] }
+  ForbiddenMethodCall:
+    active: true
+    excludes: ['**/client/**']
+    methods: [ { value: 'java.lang.Thread.sleep', reason: 'Use the shared retry policy' },
+               { value: 'kotlin.io.println', reason: 'Use SLF4J' } ]
+```
 
 ## Invariants
 
@@ -408,7 +472,7 @@ Kotlin: `Konsist.scopeFromProduction().assertArchitecture { val domain = Layer("
 
 - detekt: `./gradlew detektBaseline` writes `config/detekt/baseline.xml`; entries may only be removed.
 - PMD/Checkstyle: no native baseline. PMD `excludeFromFailureFile` (Maven) or Checkstyle `SuppressionFilter` with a generated `suppressions.xml`, both ratcheted by line count in CI; ktlint `--baseline=ktlint-baseline.xml`; ArchUnit `FreezingArchRule.freeze(rule)` with `freeze.store.default.allowStoreCreation=true` set once.
-- Coverage: JaCoCo/Kover check on the whole bundle cannot ratchet per line. Use diff coverage on the JaCoCo XML (`pip install diff-cover`; `diff-cover target/site/jacoco/jacoco.xml --compare-branch=origin/main --fail-under=100`) and leave the global floor at today's value, raised as it grows.
+- Coverage: JaCoCo/Kover check on the whole bundle cannot ratchet per line. Use diff coverage on the JaCoCo XML (`pip install diff-cover`; `diff-cover target/site/jacoco/jacoco.xml --compare-branch=origin/main --fail-under=70`, Strict: 100) and leave the global floor at today's value, raised as it grows.
 - Mutation: PIT on changed classes only (script above).
 
 ## Pre-commit wiring

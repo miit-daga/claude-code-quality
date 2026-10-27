@@ -26,9 +26,10 @@ scripts, justfile, nox, Gradle/Maven task, `mix` alias):
 - **`quality-fast`**: format check, lint (complexity, cognitive, params, nesting, file
   length), type check, the bundled scripts without coverage, and the unit tests. Target
   under about 60 seconds, because it runs on every agent stop and every commit.
-- **`quality`**: everything in `quality-fast`, plus full coverage at 100%, CRAP from the
-  coverage report, dead code, duplication, dependency checks, and mutation testing on
-  changed code. Runs in CI.
+- **`quality`**: everything in `quality-fast`, plus coverage at the profile's floor
+  (Standard ≥ 70%, Strict 100%), CRAP from the coverage report, dead code, duplication,
+  dependency checks, and mutation testing on changed code with its score gate
+  (Standard ≥ 80% on covered code, Strict 0 survivors). Runs in CI.
 
 Example Makefile skeleton (adapt the tool lines from the language reference):
 
@@ -43,19 +44,20 @@ quality-fast:
 	<linter> .                                    # complexity, cognitive, params, nesting
 	<type checker>
 	python $(S)/loc_budget.py $(SRC) tests
-	python $(S)/complexity_gate.py $(SRC) --params-max 5 --nloc-max 50
+	python $(S)/complexity_gate.py $(SRC) --params-max 5 --nloc-max 60   # 100 for Java/Kotlin/C#/PHP; Strict 50
 	python $(S)/halstead_gate.py $(SRC)
 	python $(S)/comment_density.py $(SRC)
 	python $(S)/suppression_audit.py . --zero skipped coverage --baseline .quality/suppressions.json
 	<unit tests>
 
 quality: quality-fast
-	<tests with coverage, fail under 100 line+branch, write lcov/cobertura>
+	<tests with coverage, fail under 70 line+branch (Strict: 100), write lcov/cobertura>
 	python $(S)/complexity_gate.py $(SRC) --coverage <report>      # CRAP < 25
 	<dead code tool>
 	<duplication tool, e.g. npx jscpd --threshold 0 $(SRC)>
 	<unused dependency tool>
-	<mutation tool, changed files only>
+	<mutation tool, changed files only, writing its report>
+	python $(S)/mutation_score.py <report> --min-covered 80        # Strict: --max-survived 0
 
 .PHONY: quality quality-fast
 ```

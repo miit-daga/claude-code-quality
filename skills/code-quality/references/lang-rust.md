@@ -7,7 +7,7 @@ Clippy has no cyclomatic, Halstead or file-length lint, and its `cognitive_compl
 is not SonarSource's metric. For those, use lizard (via `scripts/complexity_gate.py` and
 `lizard -Ecognitive`) and the other bundled scripts. Lint groups and defaults below were
 checked against clippy master of 2026-10-17 (stable 1.99), cargo-mutants 27.1 and
-cargo-llvm-cov 0.9.
+cargo-llvm-cov 0.9. Values are the Standard profile; Strict values are noted where they differ.
 
 ## Tool map
 
@@ -17,14 +17,14 @@ cargo-llvm-cov 0.9.
 | Cognitive < 22 | `lizard -Ecognitive` (SonarSource spec; tested with lizard 1.24.1); clippy `cognitive_complexity` as an editor-time signal | lizard `-T cognitive_complexity=21` warns at `> 21`. Clippy: `restriction` group, `cognitive-complexity-threshold = 21`, fires at `> 21`. Clippy's own docs say the lint does not measure true cognitive complexity |
 | Halstead difficulty < 80 | `scripts/halstead_gate.py` (per file, via multimetric) | advisory by default (per-file scale); gate with a calibrated `--file-max` |
 | File < 500 lines | `scripts/loc_budget.py` | no clippy lint exists |
-| 100% coverage | cargo-llvm-cov | Lines: `--fail-uncovered-lines 0`. Branch coverage needs **nightly** (`--branch`, unstable) and has no fail flag, so check `BRF`/`BRH` in the lcov file. On stable, `--fail-uncovered-regions 0` is a partial proxy (see Coverage) |
+| Coverage ≥ 70% line + branch (Strict: 100%) | cargo-llvm-cov | Lines: `--fail-under-lines 70` (exit 1 below; Strict: `--fail-uncovered-lines 0`). Branch coverage needs **nightly** (`--branch`, unstable) and has no fail flag, so check `BRH/BRF ≥ 0.7` in the lcov file. On stable, `--fail-under-regions 70` is a partial proxy (see Coverage) |
 | CRAP < 25 | `complexity_gate.py --coverage lcov.info` | |
-| 0 surviving mutants | cargo-mutants | exit 0 only when every viable mutant is caught |
+| Mutation score ≥ 80% on covered changed code (Strict: 0 survivors) | cargo-mutants `--in-diff` + `mutation_score.py` | cargo-mutants exits 2 on any missed mutant, so the Makefile accepts 2 and 3 and gates `outcomes.json`. Strict: cargo-mutants' own exit status |
 | 0 dead code | rustc `unused` group (includes `dead_code`) at deny + `unreachable_pub`; cargo-shear (unused deps and unlinked `.rs` files) | `unreachable_pub` forces `pub(crate)` on crate-internal items so `dead_code` can see them |
 | 0 duplication | `jscpd --format rust`; clippy `complexity` and `style` groups for redundant code | `--min-tokens 50 --exit-code 1` |
 | 0 `any` equivalents | clippy `disallowed_types` (`style`; covers types and traits); ast-grep `rust-no-untyped`; `unsafe_code = "forbid"` | `std::any::Any`, `serde_json::Value` |
 | ABC ≤ 17 | none for Rust | lizard token count is the only proxy |
-| Function ≤ 50 NLOC | clippy `too_many_lines` (`pedantic`) | `too-many-lines-threshold = 50`. Counts only lines containing code. Fires at `> 50` |
+| Function ≤ 60 NLOC (Strict: 50) | clippy `too_many_lines` (`pedantic`) | `too-many-lines-threshold = 60`. Counts only lines containing code. Fires at `> 60` |
 | Params ≤ 5 | clippy `too_many_arguments` (`complexity`) | `too-many-arguments-threshold = 5`, fires at `> 5`. Also `fn_params_excessive_bools` (`pedantic`) |
 | Nesting ≤ 3 | clippy `excessive_nesting` (`complexity`; inert until a threshold is set) | `excessive-nesting-threshold = 5`. It counts **every `{}` block** plus `impl`/`trait`/inline `mod`, and fires at `> 5`. That allows 3 control levels inside an `impl` method but 4 in a free function, so it is looser than ≤ 3 there. For an exact ≤ 3 everywhere, add `lizard -l rust -ENS -Tmax_nested_structures=3 -w src` (lizard's nesting count is accurate for brace languages) |
 | Bool operators ≤ 3 | ast-grep `rust-max-bool-ops` | `nonminimal_bool` / `overly_complex_bool_expr` (`pedantic`) only simplify; they do not count |
@@ -34,6 +34,7 @@ cargo-llvm-cov 0.9.
 | Unused deps | `cargo shear --deny-warnings` (stable); cargo-machete (stable, exit 1 on findings); cargo-udeps (nightly, slower, compiler-accurate) | |
 | No logic in tests | ast-grep `rust-no-logic-in-tests` | flags `if`/`match`/loops inside `mod tests` and `tests/` |
 | TODO ban | clippy `todo`, `unimplemented` (`restriction`); `suppression_audit.py --zero todo` for comments | |
+| One way for service calls, retries, logging, errors | clippy `disallowed_methods` / `disallowed_macros` (`style`), cargo-deny `wrappers` | see Cross-cutting conventions |
 
 ## Configuration
 
@@ -59,6 +60,11 @@ python3 -m venv .venv && .venv/bin/pip install lizard radon multimetric ast-grep
 brew install lefthook      # or: pipx install lefthook
 mkdir -p tools/quality .quality && cp <skill-dir>/scripts/*.py tools/quality/
 ```
+
+**Formatting choices are small but still the org's or user's.** rustfmt is the only mainstream
+formatter. A `rustfmt.toml` can set stable options such as `style_edition` and `max_width`;
+`imports_granularity` and `group_imports` are unstable and need nightly rustfmt. The test runner
+(`cargo test` or cargo-nextest) is a choice too. The `quality-tool-picker` skill compares options.
 
 ### rust-toolchain.toml
 
@@ -116,7 +122,7 @@ take `-1` and individual lints the default `0`.
 
 ```toml
 cognitive-complexity-threshold = 21   # fires at > 21
-too-many-lines-threshold = 50         # counts lines with code; fires at > 50
+too-many-lines-threshold = 60         # Strict: 50. Counts lines with code; fires at > 60
 too-many-arguments-threshold = 5      # fires at > 5
 excessive-nesting-threshold = 5       # blocks + impl/trait/inline mod; 5 = 3 control levels in a method
 max-fn-params-bools = 1               # fires at > 1 bool parameter (flag arguments)
@@ -202,7 +208,7 @@ quality-fast:
 	cargo clippy --all-targets --all-features --locked -- -D warnings
 	.venv/bin/ast-grep scan
 	$(PY) $(S)/loc_budget.py src tests
-	$(PY) $(S)/complexity_gate.py src --params-max 5 --nloc-max 50
+	$(PY) $(S)/complexity_gate.py src --params-max 5 --nloc-max 60   # Strict: 50
 	.venv/bin/lizard -l rust -Ecognitive -C 21 -T cognitive_complexity=21 -w src   # -C 21 overrides lizard's default CCN 15 warning
 	$(PY) $(S)/halstead_gate.py src
 	$(PY) $(S)/comment_density.py src --fail-on-commented-code
@@ -211,19 +217,24 @@ quality-fast:
 
 quality: quality-fast
 	cargo llvm-cov --all-features --workspace --locked --lcov --output-path lcov.info \
-	  --fail-uncovered-lines 0 --fail-uncovered-regions 0 --fail-uncovered-functions 0
+	  --fail-under-lines 70     # Strict: --fail-uncovered-lines 0 --fail-uncovered-regions 0 --fail-uncovered-functions 0
 	$(PY) $(S)/complexity_gate.py src --coverage lcov.info
 	cargo shear --deny-warnings
 	jscpd --format rust --min-tokens 50 --exit-code 1 src
-	git diff "$$(git merge-base $(BASE) HEAD)" > git.diff
-	cargo mutants --in-diff git.diff
+	rm -rf mutants.out && git diff "$$(git merge-base $(BASE) HEAD)" > git.diff
+	cargo mutants --in-diff git.diff; rc=$$?; [ $$rc -eq 0 ] || [ $$rc -eq 2 ] || [ $$rc -eq 3 ] || exit $$rc
+	[ ! -f mutants.out/outcomes.json ] || $(PY) $(S)/mutation_score.py mutants.out/outcomes.json --min-covered 80
+	# Strict: replace the two lines above with plain `cargo mutants --in-diff git.diff`
 
 .PHONY: quality quality-fast
 ```
 
 Diffing the merge-base against the working tree keeps the diff's new side identical to
 the tree, which `--in-diff` requires (exit 5 otherwise). Before the first commit on
-`main` exists, run plain `cargo mutants`.
+`main` exists, run plain `cargo mutants`. The mutation lines are tested with a stub
+`cargo`: exit 2 with 1 of 10 missed passes, 3 of 10 fails, exit 4 (baseline tests fail)
+stops the target. An empty diff or one with no Rust changes exits 0 without writing
+`mutants.out`, so the `rm -rf` keeps a stale `outcomes.json` from being scored.
 
 ## Coverage report for CRAP
 
@@ -237,15 +248,15 @@ Branch coverage (nightly only; `--branch` is unstable and has no `--fail-under` 
 
 ```bash
 cargo +nightly llvm-cov --branch --all-features --workspace --lcov --output-path lcov.info
-awk -F: '/^BRF:/{f+=$2} /^BRH:/{h+=$2} END{printf "branches %d/%d\n",h,f; exit (h<f)}' lcov.info
+awk -F: '/^BRF:/{f+=$2} /^BRH:/{h+=$2} END{printf "branches %d/%d\n",h,f; exit (h < 0.7*f)}' lcov.info   # Strict: (h < f)
 ```
 
 Confirm the file actually contains `BRF`/`BRH` lines before relying on this (verify for
-your toolchain). On stable, `--fail-uncovered-regions 0` catches unexecuted blocks and
-short-circuited operands, but not an `if` without `else` whose condition was never
-false. Coverage exclusions use `#[cfg_attr(coverage_nightly, coverage(off))]` plus
+your toolchain). On stable, region coverage (`--fail-under-regions 70`; Strict:
+`--fail-uncovered-regions 0`) counts unexecuted blocks and short-circuited operands, but not
+an `if` without `else` whose condition was never false. Coverage exclusions use `#[cfg_attr(coverage_nightly, coverage(off))]` plus
 `#![cfg_attr(coverage_nightly, feature(coverage_attribute))]`. `suppression_audit.py`
-counts `coverage(off)`. cargo-tarpaulin (`--out Lcov --fail-under 100`) also works,
+counts `coverage(off)`. cargo-tarpaulin (`--out Lcov --fail-under 70`, Strict 100) also works,
 but its `--branch` flag is documented as "NOT IMPLEMENTED", and its exclusions
 (`#[cfg(not(tarpaulin_include))]`, `#[tarpaulin::skip]`) are counted by the audit.
 
@@ -263,13 +274,19 @@ Results go to `mutants.out/`: `missed.txt`, `timeout.txt`, `caught.txt`, `unviab
 `f -> bool` with true", "delete `!`", "replace `<` with `<=`") changed nothing
 observable, otherwise add the assertion that would fail.
 
-Exit codes: **0** every viable mutant caught; **1** usage error; **2** missed mutants;
-**3** timeouts; **4** tests fail before mutation; **5** `--in-diff` diff does not match
-the tree; **6** invalid diff; **70** internal error. Any non-zero exit fails CI, which
-also covers "0 surviving" (missed and timeouts both fail).
+Exit codes (from the cargo-mutants book and `src/exit_code.rs`): **0** every viable mutant
+caught; **1** usage error; **2** missed mutants; **3** timeouts; **4** tests fail before
+mutation; **5** `--in-diff` diff does not match the tree; **6** invalid diff; **70**
+internal error. cargo-mutants has no score threshold, so the Standard gate lets 2 and 3
+through and runs `mutation_score.py mutants.out/outcomes.json --min-covered 80` on the
+`caught`, `missed`, `timeout` and `unviable` counts (timeouts count as killed, unviable
+mutants are left out). Every other non-zero code still fails. cargo-mutants has no
+coverage step, so a mutant in code no test runs counts as missed: the 80% partly repeats
+coverage here. Strict uses cargo-mutants' own exit status, which fails on any missed
+mutant or timeout.
 
-Equivalent mutants: add `mutants = "0.0.4"` as a regular `[dependencies]` entry, since
-the attribute sits on non-test code and has no effect on the compiled output. Then:
+Equivalent mutants (Standard absorbs a few in the 20% margin; Strict must mark each): add
+`mutants = "0.0.4"` as a regular `[dependencies]` entry, since the attribute sits on non-test code and has no effect on the compiled output. Then:
 
 ```rust
 #[mutants::skip] // equivalent: capacity hint only; replacing it with 0 cannot change output
@@ -327,6 +344,48 @@ Do not replace them with `HashMap<String, String>` bags, `String` for every fiel
 - Tests asserting `result.is_ok()` (hides the value) or `#[ignore]` without a reason. Fix:
   `assert_eq!(f()?, expected)` in a `-> Result` test, and `#[ignore = "reason"]`
   (`ignore_without_reason`, pedantic).
+
+## Cross-cutting conventions
+
+One module per concern, and lints that reject every other way. Libraries are examples; the
+org's toolkit or the user picks them (`cross-cutting.md`, or the `quality-tool-picker` skill).
+Here: `crate::http` builds the one `reqwest::Client` (connect and request timeouts) and a
+tonic channel with per-call deadlines, `crate::retry` wraps a backoff crate (backon,
+tokio-retry), logging is `tracing` with one subscriber set up in `main`, and errors are a
+`thiserror` enum per library crate with `anyhow` only in binaries. Add to `clippy.toml`
+(`disallowed_methods` and `disallowed_macros` are in `style`, so `all = "deny"` already denies them):
+
+```toml
+disallowed-methods = [
+  { path = "reqwest::get", reason = "call services through crate::http", allow-invalid = true },
+  { path = "reqwest::Client::new", reason = "crate::http builds the client with timeouts", allow-invalid = true },
+  { path = "reqwest::Client::builder", reason = "crate::http builds the client with timeouts", allow-invalid = true },
+  { path = "std::thread::sleep", reason = "retries and polling go through crate::retry" },
+  { path = "tokio::time::sleep", reason = "retries and polling go through crate::retry", allow-invalid = true },
+]
+disallowed-macros = [   # one logging facade: tracing
+  { path = "log::info", reason = "use tracing::info!", allow-invalid = true },
+  { path = "log::warn", reason = "use tracing::warn!", allow-invalid = true },
+  { path = "log::error", reason = "use tracing::error!", allow-invalid = true },
+]
+```
+
+`println!`/`eprintln!` are already denied by `print_stdout`/`print_stderr`, and `map_err_ignore`
+(`restriction`; add `map_err_ignore = "deny"` to `[lints.clippy]`) rejects `.map_err(|_| ...)`,
+which throws the cause away. The sanctioned modules opt out per item with
+`#[expect(clippy::disallowed_methods, reason = "the one place that builds the client")]`, which
+the suppression audit counts. `allow-invalid` keeps clippy quiet while a crate is not yet a
+dependency (it needs a recent clippy; verify for your version). In a workspace, cargo-deny can
+also make the HTTP crate the only one allowed to depend on reqwest:
+
+```toml
+# deny.toml
+[bans]
+deny = [{ crate = "reqwest", wrappers = ["app-http"], reason = "service calls go through app-http" }]
+```
+
+`wrappers` lets only the listed crates depend on the banned crate directly; a third-party crate
+that pulls in reqwest must be added to the list too.
 
 ## Invariants
 
@@ -387,7 +446,7 @@ Do not replace them with `HashMap<String, String>` bags, `String` for every fiel
   crate, start at `warn` and ratchet the count (`cargo clippy --message-format=short 2>&1
   | grep -c '^warning'` stored in `.quality/`), or promote one lint at a time to `deny`.
 - Mutation on the diff: `cargo mutants --in-diff git.diff`.
-- Coverage on the diff: `diff-cover lcov.info --compare-branch=origin/main --fail-under=100`.
+- Coverage on the diff: `diff-cover lcov.info --compare-branch=origin/main --fail-under=70` (Strict: 100).
 - Duplication: `jscpd --format rust --baseline-from-ref origin/main --fail-on-new-clones src`.
 - Suppressions: `suppression_audit.py . --write-baseline .quality/suppressions.json`, then `--baseline` in CI.
 
@@ -411,7 +470,7 @@ pre-commit:
       glob: "*.rs"
       run: >-
         .venv/bin/python tools/quality/loc_budget.py {staged_files} &&
-        .venv/bin/python tools/quality/complexity_gate.py {staged_files} --params-max 5 --nloc-max 50 &&
+        .venv/bin/python tools/quality/complexity_gate.py {staged_files} --params-max 5 --nloc-max 60 &&
         .venv/bin/lizard -l rust -Ecognitive -C 21 -T cognitive_complexity=21 -w {staged_files}
 pre-push:
   jobs:

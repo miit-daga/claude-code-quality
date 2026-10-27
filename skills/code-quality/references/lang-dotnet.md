@@ -4,6 +4,10 @@ Roslyn does most of the work at build time: `AnalysisMode=All`, nullable referen
 
 **Threshold semantics:** CA1502/CA1506 and every Sonar rule here fire at value `>` setting, so set the budget itself (21, not 22). CA1505 fires when maintainability index `<` setting. Prove each boundary with a 21/22 fixture (SKILL.md A6).
 
+**Profiles.** Values below are Standard (the default): coverage ≥ 70% line and branch, mutation score ≥ 80% on covered changed code, methods ≤ 100 lines. Strict values (100% coverage, 0 surviving mutants, ≤ 50 lines) appear as `Strict:` notes next to each setting.
+
+**Formatter is the org's choice.** Ask the user, or follow the org toolkit (a shared `.editorconfig` or `Directory.Build.props` package). Options: `dotnet format` driven by `.editorconfig` (ships with the SDK, every style rule configurable) or CSharpier (opinionated, almost no options; `dotnet csharpier check .` in CI). Do not run both on the same files. For a researched comparison use the `quality-tool-picker` skill. The Makefile below uses `dotnet format` as one option.
+
 ## Tool map
 
 | Gate | Tool | Setting / rule |
@@ -12,14 +16,14 @@ Roslyn does most of the work at build time: `AnalysisMode=All`, nullable referen
 | Cognitive < 22 | Sonar S3776 | `threshold=21` (off by default in the NuGet package; enable it) |
 | Halstead < 80 | none native | `scripts/halstead_gate.py` (per file, multimetric): advisory unless a calibrated `--file-max` is set |
 | File < 500 lines | `scripts/loc_budget.py` (physical lines); Sonar S104 | S104 counts code lines only: `maximumFileLocThreshold=499` as a second check |
-| 100% line + branch | coverlet.msbuild | `/p:Threshold=100 /p:ThresholdType=\"line,branch,method\" /p:ThresholdStat=total` |
+| ≥ 70% line + branch (Strict: 100%) | coverlet.msbuild | `/p:Threshold=70 /p:ThresholdType=\"line,branch\" /p:ThresholdStat=total` (Strict: `Threshold=100`, add `method`) |
 | CRAP < 25 | `scripts/complexity_gate.py` | `--coverage coverage/coverage.cobertura.xml` |
-| 0 surviving mutants | Stryker.NET | `thresholds: {high:100, low:100, break:100}` (counts NoCoverage as undetected) |
+| Mutation score ≥ 80% on covered changed code (Strict: 0 survivors) | Stryker.NET + `scripts/mutation_score.py` | `--since:main`, `json` reporter, `mutation_score.py --min-covered 80` (Stryker's `break` uses the total score, NoCoverage included). Strict: `break: 100` |
 | 0 dead code | IDE0051, IDE0052, IDE0060, IDE0005; Sonar S1144, S1172; CA1812 (in `All`) | severity `error` in `.editorconfig`; IDE rules need `EnforceCodeStyleInBuild` |
 | 0 duplication | jscpd (no clone detector in the NuGet analyzers; Sonar CPD is server-side only) | `npx jscpd src --format csharp --threshold 0` |
 | 0 `any`-style types | `<Nullable>enable` + warnings as errors; Nullable.Extended.Analyzer for `!`; `suppression_audit.py` for `dynamic` | no analyzer bans `dynamic` or `object` parameters; review those |
 | ABC ≤ 17 | none | `lizard -l csharp -T token_count=<n>` as a proxy |
-| Function ≤ 50 NLOC | Sonar S138 | `max=50` |
+| Method ≤ 100 lines (Strict: 50) | Sonar S138 | `max=100` (fires when >) |
 | Params ≤ 5 | Sonar S107 | `max=5` (off by default; enable) |
 | Nesting ≤ 3 | Sonar S134 | `maximumNestingLevel=3` |
 | Boolean ops ≤ 3 | Sonar S1067 | `max=3` |
@@ -98,7 +102,7 @@ CA1502(Method): 21
     <Rule><Key>S3776</Key><Parameters><Parameter><Key>threshold</Key><Value>21</Value></Parameter>
       <Parameter><Key>propertyThreshold</Key><Value>3</Value></Parameter></Parameters></Rule>
     <Rule><Key>S1541</Key><Parameters><Parameter><Key>maximumFunctionComplexityThreshold</Key><Value>21</Value></Parameter></Parameters></Rule>
-    <Rule><Key>S138</Key><Parameters><Parameter><Key>max</Key><Value>50</Value></Parameter></Parameters></Rule>
+    <Rule><Key>S138</Key><Parameters><Parameter><Key>max</Key><Value>100</Value></Parameter></Parameters></Rule> <!-- Strict: 50 -->
     <Rule><Key>S104</Key><Parameters><Parameter><Key>maximumFileLocThreshold</Key><Value>499</Value></Parameter></Parameters></Rule>
     <Rule><Key>S107</Key><Parameters><Parameter><Key>max</Key><Value>5</Value></Parameter></Parameters></Rule>
     <Rule><Key>S1067</Key><Parameters><Parameter><Key>max</Key><Value>3</Value></Parameter></Parameters></Rule>
@@ -151,7 +155,7 @@ dotnet_diagnostic.CA1707.severity = none   # test method names use underscores
 ```
 P:System.DateTime.Now;Inject TimeProvider and call GetUtcNow()
 P:System.DateTime.UtcNow;Inject TimeProvider and call GetUtcNow()
-M:System.Console.WriteLine(System.String);Use ILogger
+T:System.Console;Use ILogger<T>
 T:Newtonsoft.Json.Linq.JObject;Deserialize into a record at the boundary
 ```
 
@@ -162,13 +166,13 @@ T:Newtonsoft.Json.Linq.JObject;Deserialize into a record at the boundary
   "stryker-config": {
     "project": "App.csproj",
     "reporters": ["html", "json", "progress", "cleartext"],
-    "thresholds": { "high": 100, "low": 100, "break": 100 },
+    "thresholds": { "high": 80, "low": 60, "break": 0 },
     "since": { "enabled": false, "target": "main" }
   }
 }
 ```
 
-`break` must be ≤ `low` ≤ `high`, hence all three at 100. Stryker exits 1 when the score is below `break`. The score is detected ÷ valid, and NoCoverage counts as undetected, so one survivor or one uncovered mutant fails the run.
+Stryker's score is detected ÷ valid with NoCoverage counted as undetected (the total score), and `break` compares against it, so a `break` gate would repeat the coverage gate. Stryker has no covered-code threshold. Keep `break: 0` (the default, never fails), and gate on the `json` report with `mutation_score.py --min-covered 80`, which scores killed (and timed-out) ÷ (killed + survived). `high`/`low` only colour the report. `target` defaults to `master`, so set it. Strict: `"thresholds": { "high": 100, "low": 100, "break": 100 }` (`break` ≤ `low` ≤ `high`), which fails on one survivor or one uncovered mutant; or `mutation_score.py --max-survived 0`.
 
 ## One command for every gate
 
@@ -176,21 +180,22 @@ T:Newtonsoft.Json.Linq.JObject;Deserialize into a record at the boundary
 S := tools/quality
 SRC := src
 COV := /p:CollectCoverage=true /p:CoverletOutputFormat=cobertura /p:CoverletOutput=$(CURDIR)/coverage/ \
-       /p:Threshold=100 /p:ThresholdType=\"line,branch,method\" /p:ThresholdStat=total
+       /p:Threshold=70 /p:ThresholdType=\"line,branch\" /p:ThresholdStat=total
 quality-fast:
 	dotnet format --verify-no-changes
 	python3 $(S)/loc_budget.py src tests
 	python3 $(S)/comment_density.py $(SRC) --fail-on-commented-code
 	# mutation left out: equivalent-mutant comments are allowed, each named and reported; ratchet with --baseline
 	python3 $(S)/suppression_audit.py src tests --zero coverage skipped any-type todo
-	python3 $(S)/complexity_gate.py $(SRC) --params-max 5 --nloc-max 50
+	python3 $(S)/complexity_gate.py $(SRC) --params-max 5 --nloc-max 100   # Strict: 50
 	python3 $(S)/halstead_gate.py $(SRC)
 	npx --yes jscpd $(SRC) --format csharp --threshold 0
 quality: quality-fast
 	dotnet build --no-incremental        # CA, IDE, Sonar, RS0030, RT, nullable: all errors
-	dotnet test --no-build $(COV)        # fails below 100% line, branch, method
+	dotnet test --no-build $(COV)        # fails below 70% line or branch (Strict: Threshold=100)
 	python3 $(S)/complexity_gate.py $(SRC) --coverage coverage/coverage.cobertura.xml
-	cd tests/App.Tests && dotnet stryker --since:main   # full run nightly: drop --since
+	cd tests/App.Tests && dotnet stryker --since:main -O $(CURDIR)/mutation   # full run nightly: drop --since
+	python3 $(S)/mutation_score.py mutation/reports/mutation-report.json --min-covered 80   # Strict: --max-survived 0
 .PHONY: quality quality-fast
 ```
 
@@ -207,7 +212,7 @@ Then `python <skill-dir>/scripts/complexity_gate.py src --coverage coverage/cove
 ## Mutation testing
 
 - **Install:** `dotnet new tool-manifest && dotnet tool install dotnet-stryker`; run `dotnet stryker` from the test project folder (it finds `stryker-config.json` there).
-- **Changed code:** `dotnet stryker --since:main` mutates only files changed against `main` (needs git history; in CI fetch with depth 0). `--with-baseline:main` also reuses the stored report of the target branch (`baseline.provider`: Disk, Dashboard, AzureFileStorage, S3); it is mutually exclusive with `--since`.
+- **Changed code:** `dotnet stryker --since:main` mutates only files changed against `main` (needs git history; in CI fetch with depth 0). Unchanged mutants are reported as Ignored, which `mutation_score.py` excludes, so the score covers changed code only. `--with-baseline:main` also reuses the stored report of the target branch (`baseline.provider`: Disk, Dashboard, AzureFileStorage, S3); it is mutually exclusive with `--since`.
 - **Read survivors:** the `cleartext` reporter prints them; the HTML report is `StrykerOutput/<date-time>/reports/mutation-report.html`, filterable by status (Survived, NoCoverage).
 - **Equivalent mutants:** a comment on the line above, naming the mutator and the reason:
   ```csharp
@@ -216,7 +221,7 @@ Then `python <skill-dir>/scripts/complexity_gate.py src --coverage coverage/cove
   ```
   Grammar: `Stryker disable|restore [once] all|<Mutator,...> [: reason]`. Never use `disable all` without `once`, and never `all` when one mutator is meant. `[ExcludeFromCodeCoverage]` also hides a member from Stryker, so it dodges two gates at once; the audit counts both.
 - **Runtime:** Stryker compiles all mutants into one assembly (mutant schemata) and runs only covering tests (`coverage-analysis: perTest`), so small projects take minutes. Run `--since` on PRs and a full run nightly.
-- **CI:** the non-zero exit from `break: 100` fails the job; publish the HTML report as an artifact.
+- **CI:** `mutation_score.py` on `mutation/reports/mutation-report.json` fails the job (Strict: Stryker's own exit from `break: 100`); publish the HTML report as an artifact. `-O <dir>` (dotnet-stryker 3.1+, CLI only) fixes the output folder; without it reports go to `StrykerOutput/<date-time>/reports/`.
 
 ## Killing untyped escape hatches
 
@@ -235,6 +240,48 @@ Then `python <skill-dir>/scripts/complexity_gate.py src --coverage coverage/cove
 - Hand-rolled loops that rebuild LINQ (`Any`, `ToDictionary`, `GroupBy`), or LINQ chains so long nobody can read them.
 - `record` types with `init` setters plus constructor validation: `with` expressions bypass the validation. Use get-only properties or validate in the property `init`.
 - `#region` blocks hiding a 900-line class: split the class.
+
+## Cross-cutting conventions
+
+Agents copy whichever HTTP call, retry loop or logger they saw last. Agree one way for each with the user, record it in `CONVENTIONS.md` (see `cross-cutting.md`), then make every other way fail the build. Libraries are the org's choice; the names below are examples.
+
+| Concern | One sanctioned way (example) | Enforced by |
+|---|---|---|
+| Service calls (HTTP/gRPC) | typed clients from `IHttpClientFactory` (`AddHttpClient<TClient, TImpl>`), all in `App.Infrastructure.Http`, `BaseAddress` and `Timeout` set there; gRPC through the client factory too | RS0030 bans `new HttpClient(...)`; ArchUnitNET keeps `HttpClient` in that namespace |
+| Retries, timeouts | `Microsoft.Extensions.Http.Resilience`: one `AddStandardResilienceHandler()` per client (retry, circuit breaker, attempt and total timeouts; don't stack handlers); Polly v8 `ResiliencePipeline` for non-HTTP work | RS0030 bans `Thread.Sleep`, so hand-rolled retry loops fail |
+| Logging | `ILogger<T>` with `[LoggerMessage]` source-generated methods; correlation id through `BeginScope` (or the ASP.NET Core trace id) | RS0030 bans `System.Console` (see BannedSymbols.txt above) |
+| Errors | `AddProblemDetails()` + `UseExceptionHandler()` + one `IExceptionHandler` mapping domain exceptions | Sonar S2139 (log and rethrow), CA1031 (catch general exception) |
+
+```csharp
+// Program.cs: the sanctioned way
+builder.Services.AddHttpClient<IOrdersClient, OrdersClient>(c =>
+    {
+        c.BaseAddress = new Uri(builder.Configuration["Orders:BaseUrl"]!);
+        c.Timeout = TimeSpan.FromSeconds(30);   // outer cap; the resilience handler times each attempt
+    })
+    .AddStandardResilienceHandler();
+builder.Services.AddProblemDetails();
+builder.Services.AddExceptionHandler<DomainExceptionHandler>();
+// after Build(): app.UseExceptionHandler();  (handlers never run without the middleware)
+```
+
+```
+# BannedSymbols.txt additions. A DocCommentId without a parameter list bans only the parameterless
+# overload, so list each one. Never T:System.Net.Http.HttpClient: that also bans calls on typed clients.
+M:System.Net.Http.HttpClient.#ctor;Inject a typed client from IHttpClientFactory (CONVENTIONS.md)
+M:System.Net.Http.HttpClient.#ctor(System.Net.Http.HttpMessageHandler);Inject a typed client from IHttpClientFactory
+M:System.Net.Http.HttpClient.#ctor(System.Net.Http.HttpMessageHandler,System.Boolean);Inject a typed client from IHttpClientFactory
+M:System.Threading.Thread.Sleep(System.Int32);Retries go through the resilience pipeline
+M:System.Threading.Thread.Sleep(System.TimeSpan);Retries go through the resilience pipeline
+```
+
+A project that needs an exception gets its own `BannedSymbols.<Name>.txt` or removes the shared file with `<AdditionalFiles Remove=...>`; review either change like a baseline edit.
+
+```csharp
+[Fact] public void Only_the_http_layer_touches_HttpClient() =>
+    Types().That().DoNotResideInNamespaceMatching(@"^App\.Infrastructure\.Http(\.|$)")  // 0.13+; 0.13.5 adds DoNotResideInNamespaceOrBelow (verify for your version)
+        .Should().NotDependOnAnyTypesThat().HaveFullName("System.Net.Http.HttpClient").Check(Arch);
+```
 
 ## Invariants
 
@@ -267,7 +314,7 @@ public class ArchitectureTests
 - Roslyn has no baseline file. Raise rules to `error` globally and add `[legacy/**.cs]` sections that lower named rules to `warning`; the section list may only shrink. Never `NoWarn` a gate rule project-wide.
 - `suppression_audit.py --write-baseline .quality/suppressions.json`, then `--baseline` in the audit line.
 - Sonar "new code" gating needs SonarQube/SonarCloud; the NuGet analyzer has no equivalent.
-- Coverage: `diff-cover coverage/coverage.cobertura.xml --compare-branch=origin/main --fail-under=100`, with the global coverlet `Threshold` at today's value.
+- Coverage: `diff-cover coverage/coverage.cobertura.xml --compare-branch=origin/main --fail-under=70` (Strict: 100), with the global coverlet `Threshold` at today's value.
 - Mutation: `dotnet stryker --since:main` or `--with-baseline:main`. Duplication: `npx jscpd src --baseline-from-ref origin/main --fail-on-new-clones 0`.
 
 ## Pre-commit wiring
