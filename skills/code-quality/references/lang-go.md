@@ -16,14 +16,14 @@ Values are the Standard profile; Strict values are noted where they differ.
 | Cognitive < 22 | golangci `gocognit` | `min-complexity: 21`. Reports `> 21` |
 | Halstead difficulty < 80 | no Go linter. `scripts/halstead_gate.py` (per file, via multimetric) | advisory by default (per-file scale); gate with a calibrated `--file-max`. `maintidx` (`under: 20`) uses Halstead volume but is a different metric |
 | File < 500 lines | revive `file-length-limit`; `scripts/loc_budget.py` | `max: 499`. Passes while `lines <= max` |
-| Coverage ≥ 70% (Strict: 100%) | `go test -coverprofile` + go-test-coverage | Statement coverage only: Go has **no branch coverage**, so the gate is statements alone. `threshold.total: 70` (Strict: file/package/total 100). Optional condition coverage: `gobco` (third party; it prints `Condition coverage: X/Y`, so parse that and require X/Y ≥ 0.7, or X = Y in Strict; its exit status is unverified) |
+| Coverage ≥ 70% (Strict: 100%) | `go test -coverprofile` + go-test-coverage; gocover-cobertura + diff-cover for changed lines | Statement coverage only: Go has **no branch coverage**, so the gate is statements alone. `threshold.total: 70` (Strict: file/package/total 100), and changed lines ≥ 70% (Strict: 100). Optional condition coverage: `gobco` (third party; it prints `Condition coverage: X/Y`, so parse that and require X/Y ≥ 0.7, or X = Y in Strict; its exit status is unverified) |
 | CRAP < 25 | `scripts/complexity_gate.py --coverage cover.out` | reads Go cover profiles directly |
 | Mutation score ≥ 80% on covered changed code (Strict: 0 survivors) | gremlins (`--diff`) + `mutation_score.py`; go-mutesting as fallback | see Mutation testing |
 | 0 dead code | `unused` (standard set), `unparam`, revive `unused-parameter`/`unused-receiver`, `deadcode -test` | `unparam.check-exported: true` for applications, `false` for libraries with external importers |
 | 0 duplication | golangci `dupl`; `jscpd --format go` across the repo | `dupl.threshold: 100` (tokens; default 150) |
 | 0 `any` / `interface{}` | ast-grep rule `go-no-any` (below); revive `use-any` | No golangci linter bans the empty interface. forbidigo `^any$` matches the identifier but also flags `[T any]` constraints, and it never sees `interface{}` |
 | ABC ≤ 17 | none for Go | `complexity_gate.py` lizard token count is the only proxy |
-| Function ≤ 60 NLOC (Strict: 50) | `funlen`; `complexity_gate.py --nloc-max 60` | `lines: 60` (reports `> 60`, counts blank lines, skips comments by default) |
+| Function ≤ 60 NLOC (Strict: 50) | `complexity_gate.py --nloc-max 60` (the gate); `funlen` as a looser backstop | funlen counts every body line, blank ones included, and comments unless `ignore-comments` (true by default in golangci v2, false standalone). `lines: 60` would therefore fail a 55-NLOC function with a few blank lines, so set `lines: 80` |
 | Params ≤ 5 | revive `argument-limit`; `complexity_gate.py --params-max 5` | `arguments: [5]`, reports `> 5` |
 | Nesting ≤ 3 | revive `max-control-nesting`; `nestif` as a second signal | `arguments: [3]` (fires when nesting exceeds 3); `nestif.min-complexity: 5` reports `>= 5` |
 | Bool operators ≤ 3 | ast-grep rule `go-max-bool-ops` | no linter counts `&&`/`\|\|` |
@@ -58,8 +58,8 @@ curl -sSfL https://golangci-lint.run/install.sh | sh -s -- -b "$(go env GOPATH)/
 go get -tool golang.org/x/tools/cmd/deadcode@latest
 go get -tool github.com/vladopajic/go-test-coverage/v2@latest
 go get -tool github.com/go-gremlins/gremlins/cmd/gremlins@v0.6.0
-go get -tool github.com/boumenot/gocover-cobertura@latest      # only if CI wants Cobertura XML
-python3 -m venv .venv && .venv/bin/pip install lizard radon multimetric ast-grep-cli
+go get -tool github.com/boumenot/gocover-cobertura@latest      # v1.5.0; Cobertura XML for diff-cover
+python3 -m venv .venv && .venv/bin/pip install lizard radon multimetric ast-grep-cli diff-cover
 brew install lefthook jq      # or: pipx install lefthook
 mkdir -p tools/quality .quality && cp <skill-dir>/scripts/*.py tools/quality/
 ```
@@ -84,7 +84,7 @@ linters:
   settings:
     gocyclo: { min-complexity: 21 }     # reports > 21
     gocognit: { min-complexity: 21 }    # reports > 21
-    funlen: { lines: 60, statements: -1, ignore-comments: true }   # Strict: 50. -1 disables the statement count
+    funlen: { lines: 80, statements: -1, ignore-comments: true }   # backstop: counts blank lines, so the 60-NLOC gate is complexity_gate.py. -1 disables the statement count
     nestif: { min-complexity: 5 }       # reports >= 5
     dupl: { threshold: 100 }            # tokens
     maintidx: { under: 20 }             # reports MI < 20
@@ -210,6 +210,8 @@ quality-fast:
 quality: quality-fast
 	go test -covermode=atomic -coverpkg=./... -coverprofile=cover.out ./...
 	go tool go-test-coverage --config=.testcoverage.yml
+	go tool gocover-cobertura < cover.out > coverage.xml
+	.venv/bin/diff-cover coverage.xml --compare-branch=$(BASE) --fail-under=70   # Strict: --fail-under=100 --total-percent-float
 	$(PY) $(S)/complexity_gate.py $(SRC) --coverage cover.out
 	out="$$(go tool deadcode -test ./...)"; [ -z "$$out" ] || { echo "$$out"; exit 1; }
 	go mod tidy -diff
@@ -223,6 +225,10 @@ quality: quality-fast
 - `suppression_audit.py --zero any-type` flags `any` / `interface{}` in parameters, slices and
   maps, and skips generic constraints such as `[T any]`. The ast-grep rule is the stricter,
   syntax-aware gate; the script is the cross-language backstop.
+- diff-cover holds the lines changed since `$(BASE)` to 70%, from day one. diff-cover cannot read Go
+  profiles, so gocover-cobertura (run from the go.mod directory) converts them first; no Go-native
+  tool fails on diff coverage. An empty diff passes, and CI needs the base branch fetched. Strict
+  adds `--total-percent-float`, because diff-cover truncates the total (99.6% would read as 99).
 - `deadcode` exits 0 even when it finds dead functions, hence the empty-output check.
   It reports functions unreachable from `main` (and, with `-test`, from tests) via RTA.
 - `-race` needs cgo (`CGO_ENABLED=1`) and a supported platform (linux/darwin amd64/arm64
@@ -234,7 +240,7 @@ quality: quality-fast
 go test -covermode=atomic -coverpkg=./... -coverprofile=cover.out ./...
 python3 <skill-dir>/scripts/complexity_gate.py cmd internal --coverage cover.out
 go tool cover -func=cover.out | tail -1        # "total: (statements) 74.2%"
-go tool gocover-cobertura < cover.out > coverage.xml   # Cobertura for CI UIs, run from the go.mod dir
+go tool gocover-cobertura < cover.out > coverage.xml   # Cobertura for diff-cover and CI UIs, run from the go.mod dir
 ```
 
 The script matches the profile's import-path file names (`example.com/app/internal/x.go`)
@@ -259,7 +265,8 @@ mutants:
 **Standard gate: covered score ≥ 80%.** gremlins' "test efficacy" is killed / (killed +
 lived), but v0.6.0 fails when `efficacy <= threshold`, so `--threshold-efficacy 80` fails at
 exactly 80% and `100` always fails (exit 10). The Makefile gates `gremlins.json` with
-`mutation_score.py --min-covered 80` instead (NOT COVERED is left to the coverage gate).
+`mutation_score.py --min-covered 80` instead (NOT COVERED is left to the coverage gate, except
+that a diff whose mutants are all NOT COVERED fails: that code is entirely untested).
 gremlins writes no file when the diff has no mutants, hence the `[ ! -f gremlins.json ]` guard.
 
 **Strict gate: zero survivors.** `tools/quality/gremlins_gate.sh` fails on any LIVED or NOT
@@ -286,8 +293,9 @@ survivors=$(printf '%s\n' "$all" | KNOWN="$known" awk '
 echo "no surviving mutants"
 ```
 
-Reading survivors: run with `--output-statuses lc --output-diff-statuses l` to print
-each LIVED mutant with its `-x > y / +x >= y` diff. `LIVED` means a test ran the line and
+Reading survivors: run with `-S lc` (`--output-statuses lc`) to print only LIVED and NOT
+COVERED mutants with file, line, column and mutator. `--output-diff-statuses`, which adds the
+`-x > y / +x >= y` diff, exists only on gremlins' main branch, not in v0.6.0. `LIVED` means a test ran the line and
 nothing failed: add the assertion, or delete the code if the mutation changed nothing.
 `NOT COVERED` means no test of that package executes it. gremlins runs only the mutated
 package's own tests (unless `--integration`), so cross-package coverage does not kill mutants.
@@ -361,7 +369,10 @@ One package per concern, and lint rules that reject every other way. The package
 libraries are examples; the org's toolkit or the user picks them (`cross-cutting.md`, or the
 `quality-tool-picker` skill for a comparison). Here: `internal/platform/httpclient` builds every
 `*http.Client` (timeouts, transport limits), `internal/platform/grpcclient` dials with interceptors
-and deadlines, `internal/platform/retry` is the only retry loop (e.g. wrapping `cenkalti/backoff`),
+and deadlines, `internal/platform/retry` is the only retry loop (e.g. wrapping `cenkalti/backoff`;
+if HTTP retries use hashicorp go-retryablehttp, its `DefaultRetryPolicy` ignores the method and
+retries POST, so give non-idempotent calls a custom `CheckRetry` that reads an idempotency flag
+from the request context (`resp` is nil on transport errors) or a client with `RetryMax = 0`),
 logging is `log/slog` configured once in `main`, and errors are wrapped with `%w` at package
 boundaries (errorlint, wrapcheck) with package-level sentinels (err113). Merge into `.golangci.yml`:
 
@@ -453,7 +464,7 @@ Ladder for Go, cheapest first:
 - Lint only new issues: `golangci-lint run --new-from-merge-base=origin/main` (or
   `issues.new-from-merge-base` / `new-from-rev` in config; `--whole-files` widens to whole changed files).
 - Mutation on the diff: `gremlins unleash --diff origin/main`, scored by `mutation_score.py` (Strict: the gate script above).
-- Coverage on the diff: `gocover-cobertura < cover.out > coverage.xml && diff-cover coverage.xml --compare-branch=origin/main --fail-under=70` (Strict: 100).
+- Coverage on the diff: already in `make quality` (gocover-cobertura, then diff-cover at 70; Strict: 100).
 - Suppressions: `suppression_audit.py . --write-baseline .quality/suppressions.json`, then `--baseline` in CI.
 
 ## Pre-commit wiring

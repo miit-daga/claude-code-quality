@@ -107,7 +107,8 @@ right.
 
 ## 4. Lines per file (and function length)
 
-**What:** physical lines in a file. Budget < 500. Function length: ≤ 50 NLOC suggested.
+**What:** physical lines in a file. Budget < 500. Function length: ≤ 60 NLOC, or ≤ 100 in
+Java, Kotlin, C# and PHP (Strict: ≤ 50).
 
 **Why for agents:** an agent reads files whole. Past a few hundred lines, files stop
 fitting comfortably in context alongside everything else. Agents also tend to append

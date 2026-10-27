@@ -69,9 +69,9 @@ user's say-so.
 | 2 | Cognitive complexity (per function) | < 22 | < 22 | Penalises nesting and broken flow, which cyclomatic misses |
 | 3 | Halstead difficulty (per function) | < 80 | < 80 | Catches dense, operator-heavy code that is short but hard to read. Gated per function where the tool supports it (Python); per-file scores (other languages) are advisory unless the project calibrates a per-file budget |
 | 4 | Lines per file | < 500 | < 500 | Keeps every file loadable in one read, for humans and agents |
-| 5 | Test coverage (line **and** branch) | ≥ 70% | 100% | A floor, not a quality measure: coverage only shows code ran. Past ~70–80% extra tests are mostly toil, so the test-quality gate is mutation score |
-| 6 | CRAP per function | < 25 | < 25 | Complexity × lack of coverage. Below 100% coverage it keeps untested code simple |
-| 7 | Mutation score on covered, changed code | ≥ 80% | 0 survivors | Proves tests check behaviour, not just execute lines. Measured on covered code (`scripts/mutation_score.py` or the tool's covered-code option) so it doesn't repeat coverage |
+| 5 | Test coverage (line **and** branch), project-wide **and** on changed lines | ≥ 70% | 100% | A floor, not a quality measure: coverage only shows code ran. Past ~70–80% extra tests are mostly toil, so the test-quality gate is mutation score. The changed-line check (diff coverage) stops untested new code from hiding under a healthy project total |
+| 6 | CRAP per function | < 25 | < 25 | Complexity × lack of coverage. Below 100% coverage it keeps untested code simple: at 70% coverage it caps complexity at 17, at 0% at 4 |
+| 7 | Mutation score on covered, changed code | ≥ 80% | 0 survivors | Proves tests check behaviour, not just execute lines. Measured on covered code (`scripts/mutation_score.py` or the tool's covered-code option) so it doesn't repeat coverage. Changed code with mutants but no covered ones fails |
 | 8 | Dead code | 0 | 0 | Unused functions, exports, files, params, deps |
 | 9 | Redundant code | 0 | 0 | Copy-paste duplication, no-op wrappers, re-implemented stdlib |
 | 10 | `any` / `unknown` (and equivalents) | 0 | 0 | Untyped holes are where agents hide confusion. Two uses are allowed: catch variables, and the raw input of a schema parse in a designated boundary file |
@@ -149,8 +149,9 @@ including `_files.py` and `coverage_formats.py`) and add `lizard`, `radon` and
 Then
 create **one command** that runs every gate, fast checks first: format check → lint
 (complexity, cognitive, params, nesting, file length) → types → dead code and
-duplication → tests with coverage → CRAP / Halstead / comment / suppression scripts →
-mutation on changed code. Use whatever the stack already has: `make quality`,
+duplication → tests with coverage → coverage of changed lines (diff-cover, which reads
+Cobertura, Clover, JaCoCo and lcov reports) → CRAP / Halstead / comment / suppression /
+convention scripts → mutation on changed code. Use whatever the stack already has: `make quality`,
 `npm run quality`, `just quality`, a nox session, or a Gradle/Maven task. Everything
 else (hooks, CI, CLAUDE.md) calls this command so there is a single source of truth.
 
@@ -179,8 +180,9 @@ Every change must pass `make quality` before you say it is done.
 - Functions: cyclomatic < 22, cognitive < 22, Halstead difficulty < 80, ≤ 5 params, nesting ≤ 3,
   ≤ 60 lines (≤ 100 in Java/Kotlin/C#/PHP). Don't split a cohesive function just to get shorter
 - Files: < 500 lines. Split by responsibility, never by line count
-- Tests: ≥ 70% line and branch coverage, CRAP < 25, mutation score ≥ 80% on covered changed code
-  (Strict: 100% coverage, zero surviving mutants). Every test asserts observable behaviour
+- Tests: ≥ 70% line and branch coverage, both project-wide and on the lines a change touches;
+  CRAP < 25; mutation score ≥ 80% on covered changed code (Strict: 100% coverage, zero
+  surviving mutants). Every test asserts observable behaviour
 - Service calls, retries, timeouts, logging and errors go through the modules named in
   CONVENTIONS.md. Never hand-roll a client, a retry loop or a logger
 - Zero dead code, zero duplication, zero `any`/`unknown`. Exceptions: catch variables, and the raw
@@ -205,8 +207,9 @@ fixtures that should each fail exactly one gate, and confirm each gate fails:
 - a function with cyclomatic complexity 22, and one at 21 that must pass (this checks
   the `>` vs `>=` boundary)
 - a deeply nested function (cognitive), a 500-line file, a 6-parameter function
-- untested code that drops coverage below the floor, and a test that runs code without
-  checking its result (the mutation score must fail)
+- a new function with no test at all (changed-line coverage must fail even while the project
+  total stays above 70%), and a test that runs code without checking its result (the
+  mutation score must fail)
 - a hand-rolled HTTP call or retry loop, and a raw logger call, outside the sanctioned modules
 - an unused export or function, a copy-pasted block, an `any`
 - commented-out code and a blanket suppression (both must fail), and a narrating comment
@@ -295,10 +298,12 @@ refactor code that has no tests pinning its behaviour.
 5. **Deduplicate.** Use jscpd or the language tool. Merge true duplicates. Leave
    coincidental similarity alone: two things that merely look alike today will
    change for different reasons.
-6. **Converge cross-cutting code.** Inventory every way the codebase calls other
-   services, retries, logs and reports errors (`references/cross-cutting.md` has the
-   search patterns). Agree one way with the user, migrate module by module, then add
-   the lint rules that stop new divergence.
+6. **Converge cross-cutting code.** Run `scripts/convention_census.py` to count every
+   way the codebase calls other services, retries and logs, per module. Show the user
+   the table, agree one way per concern, and record it in `CONVENTIONS.md`. Then write
+   a census baseline with the sanctioned modules allowed (`--allow`), migrate module by
+   module so the counts fall, and add the lint rules that stop new divergence
+   (`references/cross-cutting.md`). When a concern reaches zero, gate it with `--zero`.
 7. **Cut complexity and size.** Use the refactoring playbook below. Split files by
    responsibility, not alphabetically or by line count.
 8. **Reach the coverage floor with meaningful tests** (≥ 70%, or 100% in Strict).
@@ -422,7 +427,8 @@ packages, exit 1 on failure, and take `--exclude` globs. Run with `--help` for t
 | `scripts/complexity_gate.py` | cyclomatic **and cognitive** per function, params, NLOC, **CRAP** from lcov / Cobertura / JaCoCo / Clover / Go cover profiles | `lizard` ≥ 1.24 |
 | `scripts/halstead_gate.py` | Halstead difficulty: gated per function for Python; per file elsewhere, advisory unless `--file-max` is set | `radon`, `multimetric` |
 | `scripts/comment_density.py` | comment ratio, narrating comments, commented-out code | – |
-| `scripts/mutation_score.py` | mutation score from Stryker, PIT, mutmut, gremlins and cargo-mutants reports, on covered code (default ≥ 80%) or total; `--max-survived 0` for Strict | – |
+| `scripts/mutation_score.py` | mutation score from Stryker, PIT, mutmut, gremlins and cargo-mutants reports, on covered code (default ≥ 80%) or total; fails when changed code has mutants but none covered; `--max-survived 0` for Strict | – |
+| `scripts/convention_census.py` | counts each way of calling services, retrying and logging per module (10 languages); sanctioned paths via `--allow`; baseline that may only shrink; `--zero` once converged | – |
 | `scripts/suppression_audit.py` | lint/coverage/mutation suppressions, skipped tests, any-types (catch variables and `--any-type-allow` boundary files exempt), TODOs; blanket check; ratchet baseline | – |
 
 Prefer a native tool when the language has a good one (for example ESLint `complexity`

@@ -64,6 +64,7 @@ end
 ```bash
 bundle install && bundle exec tapioca init && bundle exec lefthook install   # tapioca: sorbet/config + gem RBIs
 pip install lizard multimetric semgrep && npm add -D jscpd @herb-tools/linter
+mkdir -p tools/quality && cp <skill-dir>/scripts/*.py tools/quality/   # CI cannot see the skill folder
 ```
 
 ### .rubocop.yml
@@ -119,7 +120,7 @@ SimpleCov.start do                          # Rails: SimpleCov.start "rails" do
   enable_coverage :branch                   # must come before minimum_coverage names :branch
   cover "{app,lib}/**/*.rb"                 # 1.x: also counts files no test ever loads
   minimum_coverage line: 70, branch: 70     # Strict: 100 each. Suite exits non-zero (status 2) below either
-  formats :html, SimpleCov::Formatter::CoberturaFormatter   # writes coverage/coverage.xml
+  formats :html, :json, SimpleCov::Formatter::CoberturaFormatter   # coverage.json (for `simplecov patch`) and coverage.xml
   deprecations :raise                       # 1.x: fail on legacy spellings
 end
 ```
@@ -206,7 +207,7 @@ Run `bin/packwerk init` and `bin/rails generate strong_migrations:install`. Each
 #!/usr/bin/env bash
 # bin/quality: every gate, fast ones first. CI runs it; pre-commit and the agent Stop hook call it too.
 set -euo pipefail
-S="${SLOP_SCRIPTS:-<skill-dir>/scripts}"
+S=tools/quality                  # vendored copies of the skill's scripts
 SRC=(app lib)                    # a gem: SRC=(lib)
 BASE="${BASE_REF:-origin/main}"
 fail() { echo "quality: $1" >&2; exit 1; }
@@ -227,7 +228,8 @@ python3 "$S/comment_density.py" "${SRC[@]}" --fail-on-commented-code
 # The audit counts `:nocov:`/`simplecov:disable` (coverage, held at zero), and `herb:disable` and
 # `safety_assured` (lint, ratcheted: each new one needs a reason and the user's approval).
 python3 "$S/suppression_audit.py" "${SRC[@]}" spec --zero coverage skipped any-type todo --baseline .quality/suppressions.json
-bundle exec rspec                              # >= 70% line + branch, writes coverage/coverage.xml
+bundle exec rspec                              # >= 70% line + branch, writes coverage/coverage.{json,xml}
+bundle exec simplecov patch --base "$BASE" --minimum 70   # changed lines: line, branch, method. Strict: 100
 python3 "$S/complexity_gate.py" "${SRC[@]}" --coverage coverage/coverage.xml   # CRAP < 25
 started=$(date +%s)
 bundle exec mutant run --since "$BASE" || true # exits 1 on any alive mutation; the next line is the gate
@@ -235,13 +237,18 @@ ruby tools/quality/mutant_score.rb 80 "$started"   # covered score >= 80. Strict
 ```
 
 `chmod +x bin/quality`. Each line exits non-zero on failure: RuboCop 1, reek 2, spoom 1,
-jscpd 1 (`threshold: 0`), semgrep 1 (`--error`), SimpleCov 2, mutant 1, `mutant_score.rb` 1.
+jscpd 1 (`threshold: 0`), semgrep 1 (`--error`), SimpleCov 2, `simplecov patch` 1, mutant 1, `mutant_score.rb` 1.
 flay always exits 0, hence the `grep` wrapper. Use `make quality` or a Rake task instead if the project has one.
+`simplecov patch` (SimpleCov 1.x) holds the lines changed since `$BASE` to 70% from day one, for
+each of line, branch and method coverage that the change touches. It compares exactly, with no
+rounding, and a change with nothing coverable passes (read in the 1.3.2 source, not run here).
+CI needs the base branch fetched. With SimpleCov 0.22, run diff-cover on the Cobertura file instead:
+`diff-cover coverage/coverage.xml --compare-branch="$BASE" --fail-under=70` (Strict: `--fail-under=100 --total-percent-float`).
 
 ## Coverage report for CRAP
 
 The SimpleCov block above writes Cobertura XML (paths relative to the project root):
-`bundle exec rspec && python <skill-dir>/scripts/complexity_gate.py app lib --coverage coverage/coverage.xml --top 20`.
+`bundle exec rspec && python3 tools/quality/complexity_gate.py app lib --coverage coverage/coverage.xml --top 20`.
 For lcov, add `gem "simplecov-lcov"`, configure it with
 `SimpleCov::Formatter::LcovFormatter.config { |c| c.report_with_single_file = true; c.single_report_path = "coverage/lcov.info" }`,
 and add `SimpleCov::Formatter::LcovFormatter` to `formats`.
@@ -285,9 +292,10 @@ coverage_criteria:
   only at 100%; `coverage_criteria` decides what counts as a kill; `--fail-fast` stops at the
   first alive mutation). Each run is saved to `.mutant/results/<session-id>.json.gz` (schema in
   mutant's `docs/session-json-schema.yml`), and the script below scores it, leaving subjects with
-  no selected tests to the coverage gate. `selection: { strategy: context_map }` (SimpleCov
-  `track_tests`) selects tests by per-test line coverage. Tested on synthetic session files with
-  Ruby 2.6 (80% passes, 70% fails, no new session fails); verify on a real run.
+  no selected tests to the coverage gate. If no subject has a test, the change is untested and the
+  script fails. `selection: { strategy: context_map }` (SimpleCov `track_tests`) selects tests by
+  per-test line coverage. Tested on synthetic session files with Ruby 2.6 (80% passes, 70% fails,
+  no new session fails, only untested subjects fails); verify on a real run.
 
 ```ruby
 # tools/quality/mutant_score.rb MIN [STARTED]: covered-code score from mutant's newest session file.
@@ -297,7 +305,9 @@ min = Float(ARGV.fetch(0, "80"))
 path = Dir[".mutant/results/*.json{,.gz}"].max_by { |f| File.mtime(f) }
 abort "mutant_score: no session file from this run" if path.nil? || File.mtime(path).to_i < Integer(ARGV.fetch(1, "0"))
 raw = path.end_with?(".gz") ? Zlib::GzipReader.open(path, &:read) : File.read(path)
-subjects = JSON.parse(raw).fetch("subject_results").reject { |s| s.fetch("tests").empty? }
+all = JSON.parse(raw).fetch("subject_results")
+subjects = all.reject { |s| s.fetch("tests").empty? }
+abort "mutant_score: no changed subject has a test, so the change is untested" if subjects.empty? && all.any?
 results = subjects.flat_map { |s| s.fetch("coverage_results") }
 killed = results.count { |r| r.fetch("criteria_result").values.any? }
 score = results.empty? ? 100.0 : 100.0 * killed / results.size
@@ -413,8 +423,8 @@ Path B only: gate new code fully and let old counts only fall.
   or the cop disabled. Delete entries as files get fixed and reject any diff that adds to the file.
 - `standardrb --generate-todo`, `reek --todo`, `database_consistency -g`, packwerk
   `enforce_dependencies: strict` + `package_todo.yml`: same rule, they only shrink.
-- SimpleCov 1.x: `simplecov ratchet` (per-file floors in `.simplecov_baseline.yml`) and
-  `simplecov patch --base origin/main --minimum 70` (changed lines; Strict: 100). mutant: `--since origin/main`.
+- SimpleCov 1.x: `simplecov ratchet` (per-file floors in `.simplecov_baseline.yml`); `bin/quality`
+  already gates changed lines with `simplecov patch`. mutant: `--since origin/main`.
 - `suppression_audit.py . --write-baseline .quality/suppressions.json`, then `--baseline` in CI.
 
 ## Pre-commit wiring

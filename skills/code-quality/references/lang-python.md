@@ -12,7 +12,7 @@ Ruff formats and lints, complexipy checks cognitive complexity, basedpyright typ
 | Cognitive < 22 | complexipy | `max-complexity-allowed = 21`; fails when > 21 (21 passes, 22 fails) |
 | Halstead difficulty < 80 | `scripts/halstead_gate.py` (radon, per function) | default `--max 80`, fails at ≥ 80. Raw numbers: `radon hal -f -j src` |
 | File < 500 lines | pylint `C0302` too-many-lines | `max-module-lines = 499` (500 fails). Ruff has no file-length rule. `scripts/loc_budget.py` covers all file types |
-| Coverage ≥ 70% line + branch | pytest-cov + coverage.py | `branch = true`, `fail_under = 70` gates the combined line+branch figure; the `quality` target also checks each one from `coverage.json`. Strict: `fail_under = 100` |
+| Coverage ≥ 70% line + branch | pytest-cov + coverage.py | `branch = true`, `fail_under = 70` gates the combined line+branch figure; the `quality` target also checks each one from `coverage.json`, and diff-cover holds changed lines to 70% too. Strict: 100 for all three |
 | CRAP < 25 | `scripts/complexity_gate.py --coverage coverage.lcov` | `--crap-max 25` default, fails at ≥ 25 |
 | Mutation score ≥ 80% on covered, changed code | mutmut 3.8 + `scripts/mutation_score.py` | mutmut has no score threshold and `mutmut run` exits 0 with survivors, so gate `mutants/mutmut-cicd-stats.json` with `mutation_score.py --min-covered 80`. Strict: `--max-survived 0` |
 | 0 dead code | vulture; ruff `F401` `F841` `ARG001`-`ARG005` | `min_confidence = 60`; vulture exits 3 when it finds anything |
@@ -45,7 +45,7 @@ uv add --dev ruff complexipy basedpyright mypy pylint vulture deptry import-lint
 mkdir -p tests tools/quality .semgrep src/shop/domain src/shop/adapters
 touch src/shop/domain/__init__.py src/shop/adapters/__init__.py
 cp <skill-dir>/scripts/*.py tools/quality/   # CI has no ~/.claude
-printf '.venv/\nmutants/\n.coverage\ncoverage.lcov\ncoverage.json\ncoverage.xml\n' >> .gitignore
+printf '.venv/\nmutants/\nmutmut.log\n.coverage\ncoverage.lcov\ncoverage.json\ncoverage.xml\n' >> .gitignore
 printf '.venv/\nnode_modules/\n' > .semgrepignore                    # replaces the default that skips tests/
 ```
 
@@ -247,22 +247,26 @@ quality: quality-fast
 	$(RUN) deptry $(SRC)
 	$(RUN) pylint $(SRC) tests
 	$(RUN) semgrep scan --config .semgrep --error --metrics=off --quiet
-	$(RUN) pytest -q --cov --cov-report=term-missing:skip-covered --cov-report=lcov:coverage.lcov --cov-report=json:coverage.json
+	$(RUN) pytest -q --cov --cov-report=term-missing:skip-covered --cov-report=lcov:coverage.lcov \
+	  --cov-report=json:coverage.json --cov-report=xml:coverage.xml
 	$(RUN) python -c "import json,sys; t=json.load(open('coverage.json'))['totals']; \
 	  sys.exit(min(t['percent_statements_covered'], t['percent_branches_covered']) < 70)"
+	$(RUN) diff-cover coverage.xml --compare-branch=$(BASE) --fail-under=70
 	$(RUN) python $(S)/complexity_gate.py $(SRC) --coverage coverage.lcov
 	$(MAKE) mutation
 
 mutation:
-	$(RUN) mutmut run $$(git diff --name-only $(BASE)...HEAD -- '$(SRC)/*.py' \
-	  | sed -e 's|^$(SRC)/||' -e 's|\.py$$|.*|' -e 's|/|.|g')
-	$(RUN) mutmut export-cicd-stats
+	@globs=$$(git diff --name-only $(BASE)...HEAD -- '$(SRC)/*.py' | sed -e 's|^$(SRC)/||' \
+	  -e 's|/__init__\.py$$|/x[_ǁ]*|' -e 's|\.py$$|.*|' -e 's|/|.|g'); \
+	$(RUN) mutmut run $$globs > mutmut.log 2>&1 || { grep -q 'nothing matches' mutmut.log \
+	  && echo 'mutation: no mutants in the changed files' && exit 0; cat mutmut.log; exit 1; }; \
+	$(RUN) mutmut export-cicd-stats && \
 	$(RUN) python $(S)/mutation_score.py mutants/mutmut-cicd-stats.json --min-covered 80
 
 .PHONY: quality quality-fast mutation
 ```
 
-On the sample project (two modules, six tests including a Hypothesis property) `make quality` takes about 6 s. The `mutation` target turns changed files into mutant-name globs (`src/shop/domain/money.py` becomes `shop.domain.money.*`). An empty diff passes no globs, so mutmut mutates everything. That is right for a fresh repo or a nightly run (`make mutation BASE=HEAD`). The coverage one-liner holds line and branch coverage at 70% each, since `fail_under` only sees their combined figure (field names verified on coverage.py 7.17). For Strict, change its `70` to `100` and add `--max-survived 0` to the `mutation_score.py` line.
+On the sample project (two modules, six tests including a Hypothesis property) `make quality` takes about 6 s. The `mutation` target turns changed files into mutant-name globs (`src/shop/domain/money.py` becomes `shop.domain.money.*`). mutmut 3.8 drops `__init__` from mutant names, so `src/shop/domain/__init__.py` becomes `shop.domain.x[_ǁ]*` (`x_` prefixes functions, `xǁ` methods); the older `shop.domain.__init__.*` glob matched nothing, so those mutants were skipped (or the run failed when that file was the only change). When no glob matches (the diff touches only constants, or only code no test runs), mutmut stops with "nothing matches" and the target passes; the diff-cover line is the gate for untested changes. An empty diff passes no globs, so mutmut mutates everything. That is right for a fresh repo or a nightly run (`make mutation BASE=HEAD`). All three cases verified on mutmut 3.8. The coverage one-liner holds line and branch coverage at 70% each, since `fail_under` only sees their combined figure (field names verified on coverage.py 7.17). diff-cover (11.0) holds the lines changed since `$(BASE)` to 70% as well, from Path A on; it needs the base branch fetched in CI, and an empty diff passes. For Strict, change both `70`s to `100`, add `--total-percent-float` to diff-cover (its total is otherwise truncated, so 99.6% reads as 99), and add `--max-survived 0` to the `mutation_score.py` line.
 
 ## Coverage report for CRAP
 
@@ -280,7 +284,7 @@ The lcov `SF:` paths (`src/shop/...`) match the paths lizard sees, so no path ma
 - **Run:** `mutmut run` runs everything. `mutmut run "shop.domain.money.*"` uses fnmatch on mutant names. Results are cached in `mutants/`, and a rerun on unchanged code reuses them (measured: 0 mutants re-executed). `use_git_change_detection` (default true) only decides whether changed non-.py files invalidate that cache. It does not limit mutation to your diff, so use the name globs for that.
 - **Read survivors:** `mutmut results` lists survivors (`--all true` lists every status). `mutmut show shop.price.x_discount__mutmut_1` prints the diff. `mutmut browse` is a TUI. `mutmut apply <name>` writes the mutant into your source, so only use it on a clean tree.
 - **Equivalent mutant:** put `# pragma: no mutate` on the line, with the reason after it: `# pragma: no mutate -- equivalent: max() already clamps at 0` (verified to work). Block forms are `# pragma: no mutate block` and `# pragma: no mutate start` / `# pragma: no mutate end`. Lines excluded from coverage (`pragma: no cover`, `exclude_also`) are never mutated either. That is one more reason the audit holds `coverage` at zero.
-- **Fail CI:** `mutmut run` exits 0 when mutants survive and has no score-threshold option (3.8 `run` takes only `--max-children`), so the chain always reaches the gate. `mutmut export-cicd-stats` writes `mutants/mutmut-cicd-stats.json` with `killed, survived, total, no_tests, skipped, suspicious, timeout, check_was_interrupted_by_user, segfault`. `mutation_score.py` gates killed / (killed + survived) at 80% (timeouts count as killed; `no_tests` is left to the coverage gate, and `mutate_only_covered_lines` keeps it near zero anyway). Verified: a suite with 2 of 8 covered mutants killed exits 1 with "covered score 25.0% < 80%". Strict: add `--max-survived 0`.
+- **Fail CI:** `mutmut run` exits 0 when mutants survive and has no score-threshold option (3.8 `run` takes only `--max-children`), so the chain always reaches the gate. `mutmut export-cicd-stats` writes `mutants/mutmut-cicd-stats.json` with `killed, survived, total, no_tests, skipped, suspicious, timeout, check_was_interrupted_by_user, segfault`. `mutation_score.py` gates killed / (killed + survived) at 80% (timeouts count as killed; `no_tests` is left to the coverage gate, and `mutate_only_covered_lines` keeps it near zero anyway; a report whose mutants are all `no_tests` fails, since that code is untested). Verified: a suite with 2 of 8 covered mutants killed exits 1 with "covered score 25.0% < 80%". Strict: add `--max-survived 0`.
 - **What the score covers:** the stats count every mutant in the `mutants/` cache. With a fresh `mutants/` they cover only the globbed modules; with a cached one they also include earlier results for unchanged modules (both verified). On a project gated from day one that is fine; in ratchet mode, use a fresh `mutants/` for PR runs.
 - **Runtime:** mutmut forks a worker per mutant and runs only the tests that cover the mutated function. It ran about 100 to 180 mutants/s on the sample. Real suites are dominated by per-test time, and Hypothesis tests multiply it, so lower `max_examples` in a settings profile for mutation runs. It needs POSIX `fork` (use WSL on Windows). In CI, cache `mutants/` keyed on the lockfile so reruns only re-test changed functions.
 
@@ -380,7 +384,7 @@ Path B only. Gate new code fully and let old violations only shrink.
 
 - `uv run complexipy --snapshot-create` writes `complexipy-snapshot.json`. Later runs fail on new functions over 21 and on tracked functions that got worse, and improved functions drop out automatically. `complexipy --diff origin/main` or `--staged` checks only changes.
 - `uv run basedpyright --writebaseline` writes `.basedpyright/baseline.json`. Later runs report only new errors.
-- `uv run diff-cover coverage.xml --compare-branch=origin/main --fail-under=70` holds changed lines to the 70% floor (Strict: `--fail-under=100`). `diff-quality --violations=ruff.check --compare-branch=origin/main --fail-under=100` does the same for lint, and it also supports `mypy` and `pylint`.
+- `make quality` already holds changed lines to 70% with diff-cover (Strict: `--fail-under=100 --total-percent-float`); in ratchet mode leave `fail_under` at today's figure and raise it as it grows. `diff-quality --violations=ruff.check --compare-branch=origin/main --fail-under=100` does the same for lint, and it also supports `mypy` and `pylint`.
 - `ruff check --add-noqa="legacy, see #123"` adds a specific per-line `noqa` to every existing violation once. Then `RUF100` and `suppression_audit.py --write-baseline .quality/suppressions.json` / `--baseline` keep the count falling.
 - Run mutation only on changed modules (the `mutation` target), and run `mutmut run` on everything nightly.
 

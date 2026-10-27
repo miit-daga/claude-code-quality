@@ -8,8 +8,12 @@ reports both numbers and gates on the one that measures test strength:
     covered score = killed / (killed + survived)                 # default gate
     total score   = killed / (killed + survived + no_coverage)
 
-Timeouts count as killed (the change was detected). Compile errors, runtime
-errors, unviable and ignored mutants are excluded from both.
+Timeouts count as killed (the change was detected), as do PIT's memory and run
+errors. Compile errors, unviable and ignored mutants are excluded from both.
+
+If the report has mutants but none of them is covered by a test, the changed code
+is entirely untested and the gate FAILS (the covered score would otherwise be n/a).
+A report with no mutants at all passes: there was nothing to mutate.
 
 Reports accepted (format detected from the content):
   * Stryker mutation-testing-report JSON (StrykerJS, Stryker.NET, stryker4s):
@@ -39,7 +43,8 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
 
-KILLED = {"killed", "timeout", "timed_out", "timed out", "caught"}
+# PIT counts memory and run errors as detected, so they count as killed here too.
+KILLED = {"killed", "timeout", "timed_out", "timed out", "caught", "memory_error", "run_error"}
 SURVIVED = {"survived", "lived", "missed"}
 NO_COVERAGE = {"nocoverage", "no_coverage", "not covered", "no_tests"}
 
@@ -144,6 +149,8 @@ def fmt(score: float | None) -> str:
 def failures(counts: Counts, args: argparse.Namespace) -> list[str]:
     found = []
     covered, total = counts.covered_score(), counts.total_score()
+    if covered is None and counts.no_coverage:
+        found.append(f"no covered mutants: {counts.no_coverage} mutants are in code no test runs")
     if covered is not None and covered < args.min_covered:
         found.append(f"covered score {fmt(covered)} < {args.min_covered:g}%")
     if args.min_total is not None and total is not None and total < args.min_total:

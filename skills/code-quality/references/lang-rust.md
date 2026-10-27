@@ -17,7 +17,7 @@ cargo-llvm-cov 0.9. Values are the Standard profile; Strict values are noted whe
 | Cognitive < 22 | `lizard -Ecognitive` (SonarSource spec; tested with lizard 1.24.1); clippy `cognitive_complexity` as an editor-time signal | lizard `-T cognitive_complexity=21` warns at `> 21`. Clippy: `restriction` group, `cognitive-complexity-threshold = 21`, fires at `> 21`. Clippy's own docs say the lint does not measure true cognitive complexity |
 | Halstead difficulty < 80 | `scripts/halstead_gate.py` (per file, via multimetric) | advisory by default (per-file scale); gate with a calibrated `--file-max` |
 | File < 500 lines | `scripts/loc_budget.py` | no clippy lint exists |
-| Coverage ≥ 70% line + branch (Strict: 100%) | cargo-llvm-cov | Lines: `--fail-under-lines 70` (exit 1 below; Strict: `--fail-uncovered-lines 0`). Branch coverage needs **nightly** (`--branch`, unstable) and has no fail flag, so check `BRH/BRF ≥ 0.7` in the lcov file. On stable, `--fail-under-regions 70` is a partial proxy (see Coverage) |
+| Coverage ≥ 70% line + branch (Strict: 100%) | cargo-llvm-cov; diff-cover on `lcov.info` for changed lines | `--fail-under-lines 70 --fail-under-regions 70` (exit 1 below; Strict: `--fail-uncovered-lines 0 --fail-uncovered-regions 0`). **Stable Rust has no branch gate**: `--branch` is nightly-only and cargo-llvm-cov 0.9.1 has no `--fail-under-branches`, so regions stand in (a partial proxy, see Coverage). On nightly, check `BRH/BRF ≥ 0.7` in the lcov file. Changed lines ≥ 70% (Strict: 100) |
 | CRAP < 25 | `complexity_gate.py --coverage lcov.info` | |
 | Mutation score ≥ 80% on covered changed code (Strict: 0 survivors) | cargo-mutants `--in-diff` + `mutation_score.py` | cargo-mutants exits 2 on any missed mutant, so the Makefile accepts 2 and 3 and gates `outcomes.json`. Strict: cargo-mutants' own exit status |
 | 0 dead code | rustc `unused` group (includes `dead_code`) at deny + `unreachable_pub`; cargo-shear (unused deps and unlinked `.rs` files) | `unreachable_pub` forces `pub(crate)` on crate-internal items so `dead_code` can see them |
@@ -56,7 +56,7 @@ Install:
 ```bash
 rustup component add clippy rustfmt llvm-tools-preview
 cargo install --locked cargo-llvm-cov cargo-mutants cargo-shear jscpd   # or cargo binstall
-python3 -m venv .venv && .venv/bin/pip install lizard radon multimetric ast-grep-cli
+python3 -m venv .venv && .venv/bin/pip install lizard radon multimetric ast-grep-cli diff-cover
 brew install lefthook      # or: pipx install lefthook
 mkdir -p tools/quality .quality && cp <skill-dir>/scripts/*.py tools/quality/
 ```
@@ -217,7 +217,8 @@ quality-fast:
 
 quality: quality-fast
 	cargo llvm-cov --all-features --workspace --locked --lcov --output-path lcov.info \
-	  --fail-under-lines 70     # Strict: --fail-uncovered-lines 0 --fail-uncovered-regions 0 --fail-uncovered-functions 0
+	  --fail-under-lines 70 --fail-under-regions 70   # Strict: --fail-uncovered-lines 0 --fail-uncovered-regions 0 --fail-uncovered-functions 0
+	.venv/bin/diff-cover lcov.info --compare-branch=$(BASE) --fail-under=70   # Strict: --fail-under=100 --total-percent-float
 	$(PY) $(S)/complexity_gate.py src --coverage lcov.info
 	cargo shear --deny-warnings
 	jscpd --format rust --min-tokens 50 --exit-code 1 src
@@ -228,6 +229,11 @@ quality: quality-fast
 
 .PHONY: quality quality-fast
 ```
+
+Stable Rust has no branch-coverage gate, so the coverage line gates lines and regions (see
+Coverage). diff-cover holds the lines changed since `$(BASE)` to 70% from day one; an empty diff
+passes, CI needs the base branch fetched, and Strict adds `--total-percent-float` because the
+total is otherwise truncated (99.6% reads as 99).
 
 Diffing the merge-base against the working tree keeps the diff's new side identical to
 the tree, which `--in-diff` requires (exit 5 otherwise). Before the first commit on
@@ -252,9 +258,10 @@ awk -F: '/^BRF:/{f+=$2} /^BRH:/{h+=$2} END{printf "branches %d/%d\n",h,f; exit (
 ```
 
 Confirm the file actually contains `BRF`/`BRH` lines before relying on this (verify for
-your toolchain). On stable, region coverage (`--fail-under-regions 70`; Strict:
-`--fail-uncovered-regions 0`) counts unexecuted blocks and short-circuited operands, but not
-an `if` without `else` whose condition was never false. Coverage exclusions use `#[cfg_attr(coverage_nightly, coverage(off))]` plus
+your toolchain). On stable there is no branch gate at all. Region coverage (`--fail-under-regions 70`,
+in the Makefile; Strict: `--fail-uncovered-regions 0`) is the nearest substitute: it counts
+unexecuted blocks and short-circuited operands, but not an `if` without `else` whose condition
+was never false. Coverage exclusions use `#[cfg_attr(coverage_nightly, coverage(off))]` plus
 `#![cfg_attr(coverage_nightly, feature(coverage_attribute))]`. `suppression_audit.py`
 counts `coverage(off)`. cargo-tarpaulin (`--out Lcov --fail-under 70`, Strict 100) also works,
 but its `--branch` flag is documented as "NOT IMPLEMENTED", and its exclusions
@@ -351,7 +358,7 @@ One module per concern, and lints that reject every other way. Libraries are exa
 org's toolkit or the user picks them (`cross-cutting.md`, or the `quality-tool-picker` skill).
 Here: `crate::http` builds the one `reqwest::Client` (connect and request timeouts) and a
 tonic channel with per-call deadlines, `crate::retry` wraps a backoff crate (backon,
-tokio-retry), logging is `tracing` with one subscriber set up in `main`, and errors are a
+tokio-retry; not `backoff`, which is unmaintained per RUSTSEC-2025-0012), logging is `tracing` with one subscriber set up in `main`, and errors are a
 `thiserror` enum per library crate with `anyhow` only in binaries. Add to `clippy.toml`
 (`disallowed_methods` and `disallowed_macros` are in `style`, so `all = "deny"` already denies them):
 
@@ -446,7 +453,7 @@ that pulls in reqwest must be added to the list too.
   crate, start at `warn` and ratchet the count (`cargo clippy --message-format=short 2>&1
   | grep -c '^warning'` stored in `.quality/`), or promote one lint at a time to `deny`.
 - Mutation on the diff: `cargo mutants --in-diff git.diff`.
-- Coverage on the diff: `diff-cover lcov.info --compare-branch=origin/main --fail-under=70` (Strict: 100).
+- Coverage on the diff: already in `make quality` (diff-cover on `lcov.info`, 70; Strict: 100).
 - Duplication: `jscpd --format rust --baseline-from-ref origin/main --fail-on-new-clones src`.
 - Suppressions: `suppression_audit.py . --write-baseline .quality/suppressions.json`, then `--baseline` in CI.
 

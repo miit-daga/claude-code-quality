@@ -16,7 +16,7 @@ Java: PMD 7 + CPD for complexity, unused code and duplication, Checkstyle for si
 | Cognitive < 22 | PMD / detekt | `CognitiveComplexity` `reportLevel=22` / `CognitiveComplexMethod` `threshold: 22` (inactive by default) |
 | Halstead < 80 | none native | `scripts/halstead_gate.py` (per file, multimetric): advisory unless a calibrated `--file-max` is set |
 | File < 500 lines | Checkstyle / bundled script | `FileLength` `max=499` / `scripts/loc_budget.py` (detekt has no file-length rule) |
-| ≥ 70% line + branch (Strict: 100%) | JaCoCo / Kover | `check`: LINE and BRANCH `COVEREDRATIO` 0.70 / `verify`: LINE and BRANCH bounds at 70 |
+| ≥ 70% line + branch (Strict: 100%) | JaCoCo / Kover; diff-cover for changed lines | `check`: LINE and BRANCH `COVEREDRATIO` 0.70 / `verify`: LINE and BRANCH bounds at 70; changed lines ≥ 70% from the same XML |
 | CRAP < 25 | bundled script | `complexity_gate.py --coverage target/site/jacoco/jacoco.xml` / `build/reports/kover/report.xml` |
 | Mutation score ≥ 80% on covered changed code (Strict: 0 survivors) | PIT / PIT + Arcmutate Kotlin plugin (commercial) | `testStrengthThreshold=80` (covered code only), not `mutationThreshold`; Strict: `maxSurviving=0` (see Mutation testing) |
 | 0 dead code | PMD + Error Prone / detekt | `UnusedPrivateMethod`, `UnusedPrivateField`, `UnusedLocalVariable`, `UnusedFormalParameter`, `UnusedAssignment`, `UnnecessaryImport`, EP `UnusedVariable`/`UnusedMethod` / `UnusedPrivateMember`, `UnusedPrivateProperty`, `UnusedPrivateClass`, `UnusedParameter`, `UnusedImports` (enable) |
@@ -300,7 +300,7 @@ ktlint { version = "1.8.0" }                  // one option; or Spotless `kotlin
 kover { reports {
     verify {
         rule("line") { minBound(70) }                  // Strict: 100
-        rule("branch") { bound { minValue = 70; coverageUnits = kotlinx.kover.gradle.plugin.dsl.CoverageUnit.BRANCH } }
+        rule("branch") { bound { minValue = 70; coverageUnits = kotlinx.kover.gradle.plugin.dsl.CoverageUnit.BRANCH } }   // Strict: 100
     }
 } }                                                    // total koverVerify runs on `check`
 tasks.named<de.aaschmid.gradle.plugins.cpd.Cpd>("cpdCheck") {
@@ -331,12 +331,13 @@ potential-bugs:
 
 ## One command for every gate
 
-`Makefile` at the repo root; hooks, CI and CLAUDE.md all call `make quality`. Vendor the scripts into `tools/quality/` (with `_files.py` and `coverage_formats.py`) and `pip install lizard radon multimetric`.
+`Makefile` at the repo root; hooks, CI and CLAUDE.md all call `make quality`. Vendor the scripts into `tools/quality/` (with `_files.py` and `coverage_formats.py`) and `pip install lizard radon multimetric diff-cover`.
 
 ```make
 S := tools/quality
 # src/main/kotlin for Kotlin. Keep comments off assignment lines (make keeps the spaces).
 SRC := src/main/java
+BASE ?= origin/main
 quality-fast:
 	./mvnw -B -q validate        # spotless + checkstyle, no compile
 	python3 $(S)/loc_budget.py src
@@ -347,12 +348,13 @@ quality-fast:
 	python3 $(S)/halstead_gate.py $(SRC)
 quality: quality-fast
 	./mvnw -B verify             # -Werror + Error Prone + NullAway, tests, JaCoCo, PMD, CPD, unused deps, PIT
+	diff-cover target/site/jacoco/jacoco.xml --src-roots $(SRC) --compare-branch=$(BASE) --fail-under=70   # Strict: --fail-under=100 --total-percent-float
 	python3 $(S)/complexity_gate.py $(SRC) --coverage target/site/jacoco/jacoco.xml
 	python3 $(S)/mutation_score.py target/pit-reports/mutations.xml --min-covered 80   # Strict: --max-survived 0
 .PHONY: quality quality-fast
 ```
 
-Gradle: `quality-fast` runs `./gradlew -q spotlessCheck checkstyleMain checkstyleTest` (Kotlin: `ktlintCheck detekt`), and `quality` runs `./gradlew pmdMain pmdTest cpdCheck test jacocoTestCoverageVerification buildHealth pitest` (Kotlin: `detektMain detektTest cpdCheck test koverVerify koverXmlReport buildHealth pitest`), then `python3 $(S)/mutation_score.py build/reports/pitest/mutations.xml --min-covered 80`. Only `detektMain`/`detektTest` run type-resolution rules such as `!!` and `ForbiddenMethodCall`. With ktfmt through Spotless, `spotlessCheck` replaces `ktlintCheck`. In ratchet mode add `--baseline .quality/suppressions.json` to the audit line.
+Gradle: `quality-fast` runs `./gradlew -q spotlessCheck checkstyleMain checkstyleTest` (Kotlin: `ktlintCheck detekt`), and `quality` runs `./gradlew pmdMain pmdTest cpdCheck test jacocoTestCoverageVerification buildHealth pitest` (Kotlin: `detektMain detektTest cpdCheck test koverVerify koverXmlReport buildHealth pitest`), then diff-cover on `build/reports/jacoco/test/jacocoTestReport.xml` (Kotlin: `build/reports/kover/report.xml` with `--src-roots src/main/kotlin`) and `python3 $(S)/mutation_score.py build/reports/pitest/mutations.xml --min-covered 80`. diff-cover (11.0) holds the lines changed since `$(BASE)` to 70% from day one. It needs `--src-roots` to map JaCoCo's package paths to files (default `src/main/java src/test/java`) and the base branch fetched in CI; an empty diff passes. Strict adds `--total-percent-float`, because diff-cover truncates the total (99.6% reads as 99). Only `detektMain`/`detektTest` run type-resolution rules such as `!!` and `ForbiddenMethodCall`. With ktfmt through Spotless, `spotlessCheck` replaces `ktlintCheck`. In ratchet mode add `--baseline .quality/suppressions.json` to the audit line.
 
 ## Coverage report for CRAP
 
@@ -364,8 +366,8 @@ Then `python <skill-dir>/scripts/complexity_gate.py src/main/java --coverage tar
 
 ## Mutation testing
 
-- **Gate on test strength, not PIT's mutation score.** PIT's `mutationThreshold` divides by all mutants, so NO_COVERAGE ones count against it and it repeats the coverage gate. `testStrengthThreshold` (PIT 1.6.1+, gradle-pitest-plugin 1.6.0+) is detected ÷ mutants with coverage, which is the covered-code score. Leave `mutationThreshold`, `coverageThreshold` (default 0) and `maxSurviving` (default -1) unset so they cannot fail the build first. Thresholds are integer percentages unless `thresholdPrecision` (Maven, 1.25.4+) is raised. PIT also counts memory errors, run errors and non-viable mutants as detected. `mutation_score.py` (in the Makefile above) reads `mutations.xml`, counts only kills and timeouts and excludes the rest, so it is a stricter cross-check on the same run (Gradle report: `build/reports/pitest/mutations.xml`; both need `XML` in `outputFormats`).
-- **Strict:** `maxSurviving=0` fails on any survivor. It counts total minus detected, so NO_COVERAGE mutants count too. Do not use `mutationThreshold=100`: it rounds (`thresholdPrecision=0`), so 99.6% passes.
+- **Gate on test strength, not PIT's mutation score.** PIT's `mutationThreshold` divides by all mutants, so NO_COVERAGE ones count against it and it repeats the coverage gate. `testStrengthThreshold` (PIT 1.6.1+, gradle-pitest-plugin 1.6.0+) is detected ÷ mutants with coverage, which is the covered-code score. Leave `mutationThreshold`, `coverageThreshold` (default 0) and `maxSurviving` (default -1) unset so they cannot fail the build first. PIT (1.30.1) rounds scores HALF_UP to `thresholdPrecision` decimals (default 0; Maven property or CLI `--thresholdPrecision`; check the Gradle plugin before relying on it there), so at `testStrengthThreshold=80` a 79.5% score rounds to 80 and passes, and 79.49% fails. PIT also counts memory errors, run errors and non-viable mutants as detected. `mutation_score.py` (in the Makefile above) reads `mutations.xml`, compares the exact score, counts kills, timeouts, memory errors and run errors as killed and leaves non-viable mutants out, so it is the exact cross-check on the same run (or set `thresholdPrecision=1`) (Gradle report: `build/reports/pitest/mutations.xml`; both need `XML` in `outputFormats`).
+- **Strict:** `maxSurviving=0` fails on any survivor. It counts total minus detected, so NO_COVERAGE mutants count too. `mutationThreshold=100` is equivalent but less clear: PIT caps every score at 99 (100 - 10^-precision) unless nothing survives, so 99.6% does not round up to a pass.
 - **Incremental:** `historyInputFile`/`historyOutputFile` (Gradle `historyInputLocation`/`historyOutputLocation`, or `enableDefaultIncrementalAnalysis = true`) reuse earlier results; cache `.pitest/` in CI. `scmMutationCoverage` was removed from pitest-maven (warned in 1.17.1), so restrict to changed classes yourself:
   ```bash
   T=$(git diff --name-only origin/main...HEAD -- 'src/main/java/*.java' | sed -e 's#src/main/java/##' -e 's#\.java$#*#' -e 's#/#.#g' | paste -sd, -)
@@ -406,7 +408,7 @@ Agents copy whichever HTTP call, retry loop or logger they saw last. Agree one w
 | Concern | One sanctioned way (example) | Enforced by |
 |---|---|---|
 | Service calls (HTTP/gRPC) | one `..client..` package: `RestClient`/`WebClient` beans or a gRPC stub wrapper, built once with connect and read timeouts (gRPC: a deadline per call) | ArchUnit: no other package touches the raw clients |
-| Retries | one policy: Resilience4j `Retry` (`resilience4j-spring-boot3`), or Spring Framework 7 `@Retryable` / `RetryTemplate` (the separate Spring Retry project is archived) | ArchUnit bans `Thread.sleep` outside `..client..`, so hand-rolled retry loops fail |
+| Retries | one policy: Resilience4j `Retry` (`resilience4j-spring-boot3`), or Spring Framework 7 core retry (`org.springframework.core.retry.RetryTemplate`, or `org.springframework.resilience.annotation.@Retryable` with `@EnableResilientMethods`). The separate Spring Retry project (`org.springframework.retry`) is archived, superseded by Framework 7 | ArchUnit bans `Thread.sleep` outside `..client..`, so hand-rolled retry loops fail |
 | Logging | SLF4J only; Micrometer Tracing puts `traceId`/`spanId` in the MDC; any extra key (`MDC.put("tenantId", …)`) is named once | ArchUnit `GeneralCodingRules`; Checkstyle `IllegalImport` |
 | Errors | domain exceptions mapped once (`@RestControllerAdvice` returning `ProblemDetail`) | ArchUnit `NO_CLASSES_SHOULD_THROW_GENERIC_EXCEPTIONS` |
 
@@ -472,7 +474,7 @@ Kotlin: `Konsist.scopeFromProduction().assertArchitecture { val domain = Layer("
 
 - detekt: `./gradlew detektBaseline` writes `config/detekt/baseline.xml`; entries may only be removed.
 - PMD/Checkstyle: no native baseline. PMD `excludeFromFailureFile` (Maven) or Checkstyle `SuppressionFilter` with a generated `suppressions.xml`, both ratcheted by line count in CI; ktlint `--baseline=ktlint-baseline.xml`; ArchUnit `FreezingArchRule.freeze(rule)` with `freeze.store.default.allowStoreCreation=true` set once.
-- Coverage: JaCoCo/Kover check on the whole bundle cannot ratchet per line. Use diff coverage on the JaCoCo XML (`pip install diff-cover`; `diff-cover target/site/jacoco/jacoco.xml --compare-branch=origin/main --fail-under=70`, Strict: 100) and leave the global floor at today's value, raised as it grows.
+- Coverage: JaCoCo/Kover check on the whole bundle cannot ratchet per line. The diff-cover line in `make quality` already gates changed lines (70, Strict: 100), so leave the global floor at today's value, raised as it grows.
 - Mutation: PIT on changed classes only (script above).
 
 ## Pre-commit wiring

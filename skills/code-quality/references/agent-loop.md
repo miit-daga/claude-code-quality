@@ -27,7 +27,7 @@ scripts, justfile, nox, Gradle/Maven task, `mix` alias):
   length), type check, the bundled scripts without coverage, and the unit tests. Target
   under about 60 seconds, because it runs on every agent stop and every commit.
 - **`quality`**: everything in `quality-fast`, plus coverage at the profile's floor
-  (Standard ≥ 70%, Strict 100%), CRAP from the coverage report, dead code, duplication,
+  (Standard ≥ 70% project-wide and on changed lines, Strict 100%), CRAP from the coverage report, dead code, duplication,
   dependency checks, and mutation testing on changed code with its score gate
   (Standard ≥ 80% on covered code, Strict 0 survivors). Runs in CI.
 
@@ -38,6 +38,8 @@ Example Makefile skeleton (adapt the tool lines from the language reference):
 # make keeps the spaces before a trailing comment as part of the value.
 S := tools/quality
 SRC := src
+# CI sets BASE_REF (see the workflow below); locally compare with the main branch.
+BASE_REF ?= origin/main
 
 quality-fast:
 	<formatter> --check .
@@ -52,7 +54,9 @@ quality-fast:
 
 quality: quality-fast
 	<tests with coverage, fail under 70 line+branch (Strict: 100), write lcov/cobertura>
+	diff-cover <report> --compare-branch=$(BASE_REF) --fail-under=70   # changed lines; Strict: 100 --total-percent-float
 	python $(S)/complexity_gate.py $(SRC) --coverage <report>      # CRAP < 25
+	python $(S)/convention_census.py $(SRC) --allow '<sanctioned module glob>' --baseline .quality/conventions.json
 	<dead code tool>
 	<duplication tool, e.g. npx jscpd --threshold 0 $(SRC)>
 	<unused dependency tool>

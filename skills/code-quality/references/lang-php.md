@@ -26,7 +26,7 @@ for style; PHPCS can still run the metric sniffs below. For a researched compari
 | Cognitive < 22 | `tomasvotruba/cognitive-complexity` (PHPStan) | `cognitive_complexity.function: 21` (reported when > limit, despite the "keep it under" message) |
 | Halstead < 80 | `scripts/halstead_gate.py` (multimetric, per file) | advisory by default (per-file scale); gate with a calibrated `--file-max` |
 | File < 500 lines | `scripts/loc_budget.py` | default 499 physical lines |
-| ≥ 70% line + branch (Strict: 100%) | PHPUnit + Xdebug path coverage → Clover → `tools/check_clover.py 70` | PHPUnit has no built-in fail-under. PCOV is line-only |
+| ≥ 70% line + branch (Strict: 100%) | PHPUnit + Xdebug path coverage → Clover → `tools/check_clover.py 70`; diff-cover on the same Clover for changed lines | PHPUnit has no built-in fail-under. PCOV is line-only. Changed lines ≥ 70% (Strict: 100) |
 | CRAP < 25 | the same Clover check (PHPUnit writes `crap` per method) and `scripts/complexity_gate.py --coverage build/clover.xml` | |
 | Mutation score ≥ 80% on covered changed code (Strict: 0 survivors) | Infection | `--min-covered-msi=80 --git-diff-lines` (covered MSI is native). Strict: `--min-msi=100 --min-covered-msi=100 --with-uncovered` |
 | 0 dead code | `shipmonk/dead-code-detector` (methods, constants, enum cases, properties; not whole classes) + PHPMD `unusedcode` | or Psalm `findUnusedCode` |
@@ -59,7 +59,8 @@ composer require --dev phpunit/phpunit phpstan/phpstan phpstan/extension-install
   phpmd/phpmd infection/infection rector/rector friendsofphp/php-cs-fixer deptrac/deptrac \
   shipmonk/composer-dependency-analyser captainhook/captainhook
 # Laravel: + larastan/larastan. Symfony/Doctrine: + phpstan/phpstan-symfony phpstan/phpstan-doctrine
-pip install lizard multimetric semgrep && npm add -D jscpd
+pip install lizard multimetric semgrep diff-cover && npm add -D jscpd
+mkdir -p tools/quality && cp <skill-dir>/scripts/*.py tools/quality/   # CI cannot see the skill folder
 ```
 
 Branch coverage needs **Xdebug** (`XDEBUG_MODE=coverage`). PCOV is line-only. The files below
@@ -140,10 +141,10 @@ minimum = float(sys.argv[1])
 root = ET.parse(sys.argv[2] if len(sys.argv) > 2 else "build/clover.xml").getroot()
 m = {k: int(v) for k, v in root.find("project/metrics").attrib.items() if v.isdigit()}
 problems = []
-if m["conditionals"] == 0:
-    problems.append("no branch data: run PHPUnit under Xdebug (XDEBUG_MODE=coverage) with --path-coverage")
+if not m.get("conditionals"):  # nothing to measure; with branchy code, check Xdebug and pathCoverage
+    print("clover: no branches in the report, branch check skipped")
 for k in ("statements", "conditionals"):
-    pct = 100.0 * m["covered" + k] / m[k] if m[k] else 100.0
+    pct = 100.0 * m.get("covered" + k, 0) / m[k] if m.get(k) else 100.0
     if pct < minimum:
         problems.append(f"{k}: {pct:.1f}% covered, need {minimum:g}%")
 for file in root.iter("file"):
@@ -234,7 +235,7 @@ to a built-in ignore list that skips `tests/`, and the test rule silently finds 
 # bin/quality: every gate, fast ones first. Also wire "quality": "bin/quality" into composer scripts
 # with "config": {"process-timeout": 0}, because Composer kills scripts after 300 s by default.
 set -euo pipefail
-S="${SLOP_SCRIPTS:-<skill-dir>/scripts}"
+S=tools/quality                               # vendored copies of the skill's scripts
 BASE="${BASE_REF:-origin/main}"
 B=vendor/bin
 
@@ -254,6 +255,7 @@ python3 "$S/suppression_audit.py" src tests --zero coverage skipped any-type tod
 XDEBUG_MODE=coverage $B/phpunit --coverage-clover build/clover.xml \
   --coverage-xml build/coverage/coverage-xml --log-junit build/coverage/junit.xml
 python3 tools/check_clover.py 70 build/clover.xml   # lines + branches >= 70% (Strict: 100), CRAP < 25
+diff-cover build/clover.xml --compare-branch="$BASE" --fail-under=70   # changed lines; Strict: --fail-under=100 --total-percent-float
 python3 "$S/complexity_gate.py" src --coverage build/clover.xml   # lizard CCN + CRAP cross-check
 # Strict: --min-msi=100 --min-covered-msi=100 --with-uncovered
 XDEBUG_MODE=coverage $B/infection --threads=max --min-covered-msi=80 --ignore-msi-with-no-mutations \
@@ -261,12 +263,16 @@ XDEBUG_MODE=coverage $B/infection --threads=max --min-covered-msi=80 --ignore-ms
 ```
 
 Every line exits non-zero on failure. `--zero any-type` fails on every written `mixed`,
-docblocks included. That is intended: write the real type.
+docblocks included. That is intended: write the real type. diff-cover (11.0) reads the Clover
+file directly and holds the lines changed since `$BASE` to 70% from day one; CI needs the base
+branch fetched, and an empty diff passes. Strict adds `--total-percent-float`, because diff-cover
+truncates the total (99.6% reads as 99). PHPUnit 9.4+ also writes Cobertura (`--coverage-cobertura`)
+if another tool wants it.
 
 ## Coverage report for CRAP
 
 `XDEBUG_MODE=coverage vendor/bin/phpunit --coverage-clover build/clover.xml`, then
-`python <skill-dir>/scripts/complexity_gate.py src --coverage build/clover.xml --top 20`.
+`python3 tools/quality/complexity_gate.py src --coverage build/clover.xml --top 20`.
 Clover paths are absolute, and the script matches them by suffix (`--coverage-cobertura` works
 too). PHPUnit's Clover also carries a `crap` attribute on every `<line type="method">`, computed
 from PHPUnit's own CCN. `tools/check_clover.py` gates on that number, and lizard's is a second opinion.
@@ -418,8 +424,7 @@ Path B only.
   defaults to true), so the file can only shrink. Never regenerate it to absorb new errors.
 - Psalm: `--set-baseline=psalm-baseline.xml`, then `--update-baseline` (it only removes
   entries). PHPMD: `--generate-baseline` (3.x writes `phpmd.baseline.xml`), then `--update-baseline`.
-- Changed-code coverage: `pip install diff-cover`, then `diff-cover build/cobertura.xml
-  --compare-branch=origin/main --fail-under=70` (Strict: 100) (PHPUnit `--coverage-cobertura`). Mutation:
+- Changed-code coverage: already in `bin/quality` (diff-cover on `build/clover.xml`, 70; Strict: 100). Mutation:
   `--git-diff-lines`. Suppressions: `suppression_audit.py --write-baseline`, then `--baseline`.
 
 ## Pre-commit wiring

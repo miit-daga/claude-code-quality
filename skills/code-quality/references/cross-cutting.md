@@ -108,11 +108,18 @@ rules worth enforcing:
 - **One layer only.** If the client retries, its callers must not retry again: three
   layers that each retry 3 times turn one failure into 27 calls.
 - **Visible.** Each retry is logged (attempt number, reason) and counted in a metric.
+- **Budgeted.** Cap retries as a share of all requests to a downstream (for example, at
+  most 10% extra calls). When a dependency is down, per-request attempt limits alone
+  still multiply its load; a retry budget or token bucket stops that.
 
 Example libraries (the org chooses): Python tenacity or stamina; TypeScript p-retry or
-cockatiel; Go hashicorp/go-retryablehttp or cenkalti/backoff; Java Resilience4j or
-Spring Retry; .NET Polly or Microsoft.Extensions.Http.Resilience; Ruby the Faraday retry
-middleware; PHP Guzzle retry middleware; Rust reqwest-retry or backoff.
+cockatiel; Go cenkalti/backoff or hashicorp/go-retryablehttp (its default policy retries
+POST too, so restrict it with a custom `CheckRetry` or a non-retrying client for
+non-idempotent calls); Java Resilience4j or the retry support built into Spring
+Framework 7 (the separate Spring Retry project is archived); .NET Polly or
+Microsoft.Extensions.Http.Resilience; Ruby the Faraday retry middleware; PHP Guzzle
+retry middleware; Rust backon or reqwest-retry (the `backoff` crate is unmaintained,
+RUSTSEC-2025-0012).
 
 ## 5. Timeouts and deadlines
 
@@ -188,8 +195,10 @@ Combine:
 
 Each language reference has a "Cross-cutting conventions" section with working config.
 
-A semgrep rule that catches hand-rolled retries and polls (tested: it flags a sleep
-inside a loop, ignores a plain sleep, and skips the sanctioned module):
+A semgrep rule that catches hand-rolled retries and polls. It was tested on `for`,
+`for…of`, `while`, `do…while` and Python `async for` loops; promise sleeps written as an
+arrow or a block; `delay()` / `sleep()` / `wait()` helpers; and `setTimeout` from
+`node:timers/promises`. It leaves single sleeps and the sanctioned module alone:
 
 ```yaml
 rules:
@@ -201,34 +210,55 @@ rules:
       - pattern-either:
           - pattern: time.sleep(...)
           - pattern: await asyncio.sleep(...)
+          - pattern: await anyio.sleep(...)
+          - pattern: await trio.sleep(...)
       - pattern-either:
           - pattern-inside: |
               for $X in $Y:
+                  ...
+          - pattern-inside: |
+              async for $X in $Y:
                   ...
           - pattern-inside: |
               while $COND:
                   ...
     paths:
       exclude:
-        - app/infra/retry.py
+        - src/infra/retry*
   - id: hand-rolled-retry-ts
     languages: [typescript, javascript]
     severity: ERROR
     message: Waiting inside a loop is a hand-rolled retry or poll. Use the shared retry helper named in CONVENTIONS.md.
     patterns:
       - pattern-either:
-          - pattern: await new Promise(($R) => setTimeout($R, $MS))
-          - pattern: await sleep(...)
-          - pattern: await setTimeout(...)
+          - pattern: await new Promise(...)
+          - pattern: |
+              await $WAIT(...)
+      - pattern-either:
+          - pattern: await new Promise(($R) => setTimeout(...))
+          - pattern: |
+              await new Promise(($R) => { ... setTimeout(...); ... })
+          - patterns:
+              - pattern: await $WAIT(...)
+              - metavariable-regex:
+                  metavariable: $WAIT
+                  regex: ^(sleep|delay|wait|pause|setTimeout|scheduler\.wait)$
       - pattern-either:
           - pattern-inside: |
               for (...) { ... }
           - pattern-inside: |
               while ($C) { ... }
+          - pattern-inside: |
+              do { ... } while ($C)
     paths:
       exclude:
-        - src/infra/retry.ts
+        - src/infra/retry*
 ```
+
+Adjust the exclude path to the project's sanctioned module (the template above uses
+`src/infra/retry`). Two things it cannot see: a sleep helper imported under another
+name (`import { setTimeout as pauseFor }`; add the alias to the regex), and a retry loop
+that doesn't sleep at all. The census below and code review cover those.
 
 Run it in `quality-fast` with `semgrep scan --config .semgrep/ --error`. By default
 semgrep skips `test/` and `tests/` and only scans files git tracks; add a `.semgrepignore`
@@ -236,25 +266,40 @@ if you need different behaviour.
 
 ## 11. Finding divergence in an existing codebase
 
-Take a census before proposing anything. Count each variant per module and show the user
-the table, then agree which one survives.
+Take a census before proposing anything. `scripts/convention_census.py` counts every
+way the code calls services, retries and logs, per module, across ten languages:
 
-| Concern | Search for (ripgrep) |
-|---|---|
-| HTTP clients | Python `import (requests\|httpx\|aiohttp\|urllib3)`; TS `from ['"](axios\|got\|node-fetch\|undici)`, `\bfetch\(`; Go `http\.(Get\|Post\|NewRequest\|DefaultClient)`, `&http\.Client\{`; Java `RestTemplate\|WebClient\|HttpClient\.new\|OkHttpClient\|@FeignClient`; C# `new HttpClient\(`; Ruby `Net::HTTP\|Faraday\|HTTParty\|RestClient`; PHP `GuzzleHttp\|curl_init`; Rust `reqwest::\|hyper::` |
-| Retries | the semgrep rule above; `retry\|backoff\|attempt` near a loop; direct imports of several retry libraries |
-| Timeouts | calls without a timeout argument (ruff `S113`); Go clients without `Timeout:` |
-| Logging | Python `print\(\|logging\.getLogger`; TS `console\.`; Go `fmt\.Print\|log\.Print`; Java `System\.(out\|err)\|java\.util\.logging\|LoggerFactory`; C# `Console\.Write`; Ruby `puts \|Rails\.logger`; PHP `error_log\(\|var_dump\(`; Rust `println!\|eprintln!` |
-| Errors | empty catch blocks, `except Exception`, log-and-rethrow pairs |
+```bash
+python <skill-dir>/scripts/convention_census.py src            # who does what, where
+python <skill-dir>/scripts/convention_census.py src --depth 3  # finer module grouping
+```
+
+Show the user the table, agree which way survives for each concern, and record it in
+`CONVENTIONS.md`. The census covers HTTP libraries and raw calls, retry libraries and
+sleep calls, and every logging library and print-style output, including competing
+libraries such as logrus, zap and zerolog side by side. It doesn't cover timeouts or
+error handling, so check those directly:
+
+```bash
+# Timeouts: Python requests calls without timeout= (ruff S113); Go clients built without Timeout
+ruff check --select S113 src
+rg -n 'http\.Client\s*\{' --type go src | rg -v 'Timeout'
+# Errors: empty catch blocks and broad excepts
+rg -n 'catch\s*(\([^)]*\))?\s*\{\s*\}' --type ts --type java --type cs src
+rg -n '^\s*except(\s+(Exception|BaseException))?\s*:' --type py src
+```
 
 ## 12. Converging on one way
 
 1. Write or pick the sanctioned module first, with its own tests.
 2. Migrate callers one module per change, busiest paths first, keeping behaviour the
    same (characterisation tests where it matters).
-3. Add the ban rule in ratchet mode: baseline the remaining violations so the count can
-   only fall, then shrink it to zero.
-4. When the count reaches zero, drop the baseline and leave the rule on.
+3. Ratchet the census: write a baseline with the sanctioned modules allowed
+   (`convention_census.py src --allow 'src/infra/*' --write-baseline
+   .quality/conventions.json`), and run it with `--baseline` in CI so no count can
+   grow. Add the lint ban rules for each concern in ratchet mode too.
+4. When a concern's count reaches zero, gate it with `--zero <concern>`, drop its
+   baseline entries and leave the lint rules on.
 
 ## 13. Org level: put it in the toolkit
 

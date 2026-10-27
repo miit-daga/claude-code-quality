@@ -12,7 +12,7 @@
 | Cognitive < 22 | `sonarjs/cognitive-complexity` | `["error", 21]`; fires when > 21. Biome: `noExcessiveCognitiveComplexity` `maxAllowedComplexity: 21`, same semantics |
 | Halstead difficulty < 80 | `scripts/halstead_gate.py` (multimetric, per file) | no maintained ESLint rule. Per-file scores are advisory by default; to gate them, calibrate a per-file budget and pass `--file-max` |
 | File < 500 lines | ESLint `max-lines` | `{ max: 499, skipBlankLines: false, skipComments: false }`. Biome: `style/noExcessiveLinesPerFile` `maxLines: 499` |
-| Coverage ≥ 70% line + branch | Vitest + `@vitest/coverage-v8` | `thresholds: { lines: 70, branches: 70 }` (global; add `perFile: true` to hold every file to it), `coverage.include` so untested files count. Strict: `{ 100: true, perFile: true }` |
+| Coverage ≥ 70% line + branch | Vitest + `@vitest/coverage-v8` | `thresholds: { lines: 70, branches: 70 }` (global; add `perFile: true` to hold every file to it), `coverage.include` so untested files count; diff-cover holds changed lines to 70% (`diffcov` script). Strict: `{ 100: true, perFile: true }`, diff-cover 100 |
 | CRAP < 25 | `scripts/complexity_gate.py --coverage coverage/lcov.info` | fails at ≥ 25 |
 | Mutation score ≥ 80% on covered, changed code | Stryker + vitest-runner + typescript-checker, then `scripts/mutation_score.py` | `thresholds.break` compares the *total* score (NoCoverage counts as not killed), so leave it `null` and gate `reports/mutation/mutation.json` with `mutation_score.py --min-covered 80`. Strict: `--max-survived 0`, or `break: 100` |
 | 0 dead code | knip; `noUnusedLocals`/`noUnusedParameters` | run `knip` and then `knip --production --strict` (catches code used only by tests) |
@@ -342,18 +342,19 @@ Per-file CSS byte budget: `python3 tools/quality/loc_budget.py src --max-bytes 2
   "budgets": "python3 tools/quality/loc_budget.py src && python3 tools/quality/comment_density.py src --fail-on-commented-code && python3 tools/quality/suppression_audit.py src --zero coverage skipped any-type todo --baseline .quality/suppressions.json --any-type-allow 'src/boundary/*'",
   "metrics": "uv run --no-project --with lizard --with multimetric python tools/quality/complexity_gate.py src --exclude '*.test.ts' --params-max 5 --nloc-max 60 && uv run --no-project --with radon --with multimetric python tools/quality/halstead_gate.py src --exclude '*.test.ts'",
   "crap": "uv run --no-project --with lizard python tools/quality/complexity_gate.py src --exclude '*.test.ts' --coverage coverage/lcov.info",
+  "diffcov": "uv run --no-project --with diff-cover diff-cover coverage/lcov.info --compare-branch=origin/main --fail-under=70",
   "deadcode": "knip && knip --production --strict",
   "dupes": "jscpd",
   "arch": "depcruise src --config .dependency-cruiser.cjs",
   "mutation": "stryker run && python3 tools/quality/mutation_score.py reports/mutation/mutation.json --min-covered 80",
   "quality:fast": "npm run format:check && npm run lint && npm run typecheck && npm run budgets && npm test",
-  "quality": "npm run quality:fast && npm run typecov && npm run deadcode && npm run dupes && npm run arch && npm run coverage && npm run metrics && npm run crap && npm run mutation",
+  "quality": "npm run quality:fast && npm run typecov && npm run deadcode && npm run dupes && npm run arch && npm run coverage && npm run diffcov && npm run metrics && npm run crap && npm run mutation",
   "prepare": "lefthook install"
 },
 "typeCoverage": { "atLeast": 100, "strict": true, "detail": true, "reportUnusedIgnore": true }
 ```
 
-Frontends add `"lint:css": "stylelint \"src/**/*.{css,scss}\""` and `"size": "size-limit"` (after the build) to `quality`. On the sample project (three modules, 15 tests including a fast-check property), `npm run quality` takes about 16 s, of which Stryker takes about 6.
+`diffcov` holds the lines changed since `origin/main` to 70% (diff-cover 11.0 reads lcov; an empty diff passes; CI must fetch the base branch). Strict: `--fail-under=100 --total-percent-float`, since diff-cover otherwise truncates the total (99.6% reads as 99). Frontends add `"lint:css": "stylelint \"src/**/*.{css,scss}\""` and `"size": "size-limit"` (after the build) to `quality`. On the sample project (three modules, 15 tests including a fast-check property), `npm run quality` takes about 16 s, of which Stryker takes about 6.
 
 ## Coverage report for CRAP
 
@@ -379,7 +380,7 @@ Jest writes the same `coverage/lcov.info` with `coverageReporters: ["lcov"]`. Th
   With `incremental`, the report also carries the cached results of files outside `--mutate` (verified), so the score then covers every file in the incremental file, not only the diff. That suits a project gated from day one. In ratchet mode, give PR runs their own empty `--incrementalFile`.
 - **Read survivors:** the clear-text reporter prints each `[Survived]` mutant with its diff and the tests that covered it. `reports/mutation/mutation.html` is browsable. `reports/mutation/mutation.json` (mutation-testing-report-schema) has `files[path].mutants[]` with `status` (`Killed`, `Survived`, `NoCoverage`, `Timeout`, `CompileError`, `Ignored`).
 - **Equivalent mutant:** `// Stryker disable next-line all: <reason>` on the line above, or name the mutator: `// Stryker disable next-line ConditionalExpression: <reason>`. Ignored mutants are excluded from the score, and `suppression_audit.py` counts them.
-- **Fail CI:** Stryker's `thresholds.break` reads only the total score (`mutationScore` in `mutation-test-report-helper.js`); there is no covered-code option, so `mutation_score.py` is the gate. Its default is killed / (killed + survived) ≥ 80%, with timeouts counted as killed and NoCoverage left to the coverage gate. The clear-text table shows the same split in its `total` and `covered` columns. Verified: a run at 26.7% total / 44.4% covered exits 0 from Stryker with `break: null`, then 1 from `mutation_score.py`. Strict: add `--max-survived 0`, or set `break: 100` (any NoCoverage mutant fails it too).
+- **Fail CI:** Stryker's `thresholds.break` reads only the total score (`mutationScore` in `mutation-test-report-helper.js`); there is no covered-code option, so `mutation_score.py` is the gate. Its default is killed / (killed + survived) ≥ 80%, with timeouts counted as killed and NoCoverage left to the coverage gate (a report with only NoCoverage mutants fails: the changed code is untested). The clear-text table shows the same split in its `total` and `covered` columns. Verified: a run at 26.7% total / 44.4% covered exits 0 from Stryker with `break: null`, then 1 from `mutation_score.py`. Strict: add `--max-survived 0`, or set `break: 100` (any NoCoverage mutant fails it too).
 - **Runtime:** `perTest` coverage runs only the covering tests per mutant. The sample's 28 mutants took about 6 s. Expect minutes for thousands of mutants, so run full runs nightly and changed files on PRs, and cache `reports/stryker-incremental.json` between CI runs.
 
 ## Killing `any` / `unknown`
@@ -479,7 +480,7 @@ Path B only. Gate new code fully and let old violations only shrink.
 - **ESLint bulk suppressions:** `eslint . --suppress-all` (or `--suppress-rule <rule>`) writes `eslint-suppressions.json` with per-file, per-rule counts. A file that goes over its count reports all its errors for that rule. A count that is no longer reached fails the run until `eslint . --prune-suppressions` shrinks the file (verified). Never pass `--pass-on-unpruned-suppressions` in CI.
 - **jscpd:** run `npx jscpd --baseline .jscpd-baseline.json --update-baseline` once. After that, `npx jscpd --baseline .jscpd-baseline.json --fail-on-new-clones --threshold 100` exits 1 only on clones marked `[NEW]`; the `--threshold 100` overrides the config's `threshold: 0`, which would otherwise still fail on old clones. Or use `--baseline-from-ref origin/main`, which builds the baseline from that ref.
 - **dependency-cruiser:** `npx depcruise-baseline src --config .dependency-cruiser.cjs` writes `.dependency-cruiser-known-violations.json`, and `depcruise src --config .dependency-cruiser.cjs --ignore-known` then fails only on new violations.
-- **Coverage and type coverage:** Vitest `thresholds.autoUpdate: true` raises thresholds as coverage rises. `type-coverage --update-if-higher` does the same for `typeCoverage.atLeast`. Both only ratchet up.
+- **Coverage and type coverage:** the `diffcov` script already gates changed lines. Vitest `thresholds.autoUpdate: true` raises the global thresholds as coverage rises. `type-coverage --update-if-higher` does the same for `typeCoverage.atLeast`. Both only ratchet up.
 - **Mutation:** Stryker `incremental` plus `--mutate` on changed files (above). `suppression_audit.py --write-baseline` / `--baseline` covers everything else. betterer is an alternative general-purpose ratchet (verify for your version: its `latest` tag is a 6.0 alpha).
 
 ## Pre-commit wiring

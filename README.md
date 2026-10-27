@@ -14,7 +14,7 @@ org already ships shared lint configs, templates or standard libraries, the skil
 those as the baseline and only adds what's missing.
 
 Coding agents optimise for whatever feedback loop they're given. A rule like "no
-function above cyclomatic complexity 21" or "every mutant must die" would be tiresome
+function above cyclomatic complexity 21" or "tests must kill 80% of mutants" would be tiresome
 for a person, but it costs an agent nothing and steers it toward smaller, simpler,
 better-tested code. This skill turns those rules into automated checks and wires them
 in where an agent can't skip them.
@@ -30,7 +30,7 @@ safety-critical code or a critical core module.
 | Cognitive complexity per function | < 22 | < 22 |
 | Halstead difficulty per function | < 80 | < 80 |
 | Lines per file | < 500 | < 500 |
-| Test coverage (line **and** branch) | ≥ 70% | 100% |
+| Test coverage (line **and** branch), project-wide and on changed lines | ≥ 70% | 100% |
 | CRAP per function | < 25 | < 25 |
 | Mutation score on covered, changed code | ≥ 80% | 0 surviving mutants |
 | Dead code | 0 | 0 |
@@ -69,7 +69,8 @@ or a test, and gives guidance on when formal methods are worth using.
 **Existing codebase.** It measures every gate first, installs the gates in *ratchet
 mode* (new code is gated fully, and old violations can only go down), then cleans up
 in order: delete dead code, remove slop, pin behaviour with tests, fix types,
-deduplicate, cut complexity, reach full coverage, kill mutants.
+deduplicate, converge the ways it calls services, retries and logs, cut complexity,
+reach the coverage floor, raise the mutation score.
 
 It also blocks the common ways an agent games a gate: loosening thresholds, blanket
 suppressions, skipped tests, splitting a function just to pass a metric, and editing
@@ -78,10 +79,10 @@ and a CI guard.
 
 ## What this plugin does on your machine
 
-**Installing it does nothing on its own.** The plugin contains one skill and a few
-Python scripts. It has no hooks, no MCP servers, no background processes and no
-network access, and it never changes your user-level `~/.claude/settings.json`. The
-skill is manual-only, so it runs only when you invoke it.
+**Installing it does nothing on its own.** The plugin contains two skills and a few
+Python scripts. It has no hooks, no MCP servers and no background processes, and it
+never changes your user-level `~/.claude/settings.json`. `code-quality` is manual-only,
+so it runs only when you invoke it. `quality-tool-picker` uses the web (see below).
 
 **When you run it on a project,** Claude first proposes a plan (the tools, the gates
 and the files involved) and asks for your approval. After you approve, it changes only
@@ -102,8 +103,8 @@ that project:
   CI and teammates can run them
 - **Git hooks:** set up through the project's pre-commit tool (lefthook, husky or
   pre-commit). This can set `core.hooksPath` in the project's `.git/config`
-- **Other files:** a CI workflow file, plus `CLAUDE.md` / `AGENTS.md` and
-  `INVARIANTS.md`
+- **Other files:** a CI workflow file, plus `CLAUDE.md` / `AGENTS.md`, `INVARIANTS.md`
+  and `CONVENTIONS.md`, and baselines under `.quality/`
 - **Test fixtures:** temporary files used to prove each gate fails, deleted afterwards
 
 **`quality-tool-picker`** uses Claude Code's web search and fetch tools to research tool
@@ -164,7 +165,8 @@ exits 1 on failure:
 | `loc_budget.py` | lines per file, and optional byte budgets for CSS/JS |
 | `complexity_gate.py` | cyclomatic and cognitive complexity per function, params, length, and **CRAP**. CRAP is computed from lcov, Cobertura, JaCoCo, Clover or Go coverage reports |
 | `halstead_gate.py` | Halstead difficulty |
-| `mutation_score.py` | mutation score from Stryker, PIT, mutmut, gremlins or cargo-mutants reports, on covered code or total |
+| `mutation_score.py` | mutation score from Stryker, PIT, mutmut, gremlins or cargo-mutants reports, on covered code or total; fails when changed code has no tested mutants |
+| `convention_census.py` | counts each way the code calls services, retries and logs, per module, with a baseline that may only shrink |
 | `comment_density.py` | comment ratio, narrating comments, commented-out code |
 | `suppression_audit.py` | lint, coverage and mutation suppressions, skipped tests, `any`-style types and TODOs across languages, with a baseline that may only shrink |
 

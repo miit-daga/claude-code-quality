@@ -16,7 +16,7 @@ Roslyn does most of the work at build time: `AnalysisMode=All`, nullable referen
 | Cognitive < 22 | Sonar S3776 | `threshold=21` (off by default in the NuGet package; enable it) |
 | Halstead < 80 | none native | `scripts/halstead_gate.py` (per file, multimetric): advisory unless a calibrated `--file-max` is set |
 | File < 500 lines | `scripts/loc_budget.py` (physical lines); Sonar S104 | S104 counts code lines only: `maximumFileLocThreshold=499` as a second check |
-| ≥ 70% line + branch (Strict: 100%) | coverlet.msbuild | `/p:Threshold=70 /p:ThresholdType=\"line,branch\" /p:ThresholdStat=total` (Strict: `Threshold=100`, add `method`) |
+| ≥ 70% line + branch (Strict: 100%) | coverlet.msbuild; diff-cover for changed lines | `/p:Threshold=70 /p:ThresholdType=\"line,branch\" /p:ThresholdStat=total` (Strict: `Threshold=100`, add `method`); changed lines ≥ 70% (Strict: 100) |
 | CRAP < 25 | `scripts/complexity_gate.py` | `--coverage coverage/coverage.cobertura.xml` |
 | Mutation score ≥ 80% on covered changed code (Strict: 0 survivors) | Stryker.NET + `scripts/mutation_score.py` | `--since:main`, `json` reporter, `mutation_score.py --min-covered 80` (Stryker's `break` uses the total score, NoCoverage included). Strict: `break: 100` |
 | 0 dead code | IDE0051, IDE0052, IDE0060, IDE0005; Sonar S1144, S1172; CA1812 (in `All`) | severity `error` in `.editorconfig`; IDE rules need `EnforceCodeStyleInBuild` |
@@ -54,7 +54,7 @@ dotnet new tool-manifest && dotnet tool install dotnet-stryker
 
 ```
 App.sln  Directory.Build.props  .editorconfig  CodeMetricsConfig.txt  SonarLint.xml  BannedSymbols.txt
-Makefile  .pre-commit-config.yaml  .config/dotnet-tools.json  tools/quality/ (vendored scripts)
+Makefile  .pre-commit-config.yaml  .config/dotnet-tools.json  .semgrep/  tools/quality/ (vendored scripts)
 src/App/  tests/App.Tests/ (stryker-config.json here)
 ```
 
@@ -172,13 +172,14 @@ T:Newtonsoft.Json.Linq.JObject;Deserialize into a record at the boundary
 }
 ```
 
-Stryker's score is detected ÷ valid with NoCoverage counted as undetected (the total score), and `break` compares against it, so a `break` gate would repeat the coverage gate. Stryker has no covered-code threshold. Keep `break: 0` (the default, never fails), and gate on the `json` report with `mutation_score.py --min-covered 80`, which scores killed (and timed-out) ÷ (killed + survived). `high`/`low` only colour the report. `target` defaults to `master`, so set it. Strict: `"thresholds": { "high": 100, "low": 100, "break": 100 }` (`break` ≤ `low` ≤ `high`), which fails on one survivor or one uncovered mutant; or `mutation_score.py --max-survived 0`.
+Stryker's score is detected ÷ valid with NoCoverage counted as undetected (the total score), and `break` compares against it, so a `break` gate would repeat the coverage gate. Stryker has no covered-code threshold. Keep `break: 0` (the default, never fails), and gate on the `json` report with `mutation_score.py --min-covered 80`, which scores killed (and timed-out) ÷ (killed + survived) and fails when every mutant is NoCoverage. `high`/`low` only colour the report. `target` defaults to `master`, so set it. Strict: `"thresholds": { "high": 100, "low": 100, "break": 100 }` (`break` ≤ `low` ≤ `high`), which fails on one survivor or one uncovered mutant; or `mutation_score.py --max-survived 0`.
 
 ## One command for every gate
 
 ```make
 S := tools/quality
 SRC := src
+BASE ?= origin/main
 COV := /p:CollectCoverage=true /p:CoverletOutputFormat=cobertura /p:CoverletOutput=$(CURDIR)/coverage/ \
        /p:Threshold=70 /p:ThresholdType=\"line,branch\" /p:ThresholdStat=total
 quality-fast:
@@ -193,18 +194,20 @@ quality-fast:
 quality: quality-fast
 	dotnet build --no-incremental        # CA, IDE, Sonar, RS0030, RT, nullable: all errors
 	dotnet test --no-build $(COV)        # fails below 70% line or branch (Strict: Threshold=100)
+	diff-cover coverage/coverage.cobertura.xml --compare-branch=$(BASE) --fail-under=70   # Strict: --fail-under=100 --total-percent-float
+	semgrep scan --config .semgrep --error --metrics=off --quiet
 	python3 $(S)/complexity_gate.py $(SRC) --coverage coverage/coverage.cobertura.xml
 	cd tests/App.Tests && dotnet stryker --since:main -O $(CURDIR)/mutation   # full run nightly: drop --since
 	python3 $(S)/mutation_score.py mutation/reports/mutation-report.json --min-covered 80   # Strict: --max-survived 0
 .PHONY: quality quality-fast
 ```
 
-Vendor the scripts into `tools/quality/` and `pip install lizard radon multimetric`. With several test projects each writes its own coverage file; use one test project per solution or merge (coverlet `MergeWith`, or `dotnet-coverage merge`).
+Vendor the scripts into `tools/quality/` and `pip install lizard radon multimetric diff-cover semgrep`. diff-cover (11.0) holds the lines changed since `$(BASE)` to 70% from day one; it needs the base branch fetched in CI, and an empty diff passes. Strict adds `--total-percent-float`, because diff-cover truncates the total (99.6% reads as 99). With several test projects each writes its own coverage file; use one test project per solution or merge (coverlet `MergeWith`, or `dotnet-coverage merge`).
 
 ## Coverage report for CRAP
 
 - coverlet.msbuild (above): `coverage/coverage.cobertura.xml`.
-- coverlet.collector (template default, no thresholds): `dotnet test --collect:"XPlat Code Coverage"` writes `TestResults/<guid>/coverage.cobertura.xml`.
+- coverlet.collector (template default, no thresholds): `dotnet test --collect:"XPlat Code Coverage"` writes `TestResults/<guid>/coverage.cobertura.xml`. It does not work with Microsoft Testing Platform v2 (the .NET 10 native `dotnet test` mode).
 - dotnet-coverage: `dotnet-coverage collect -f cobertura -o coverage.cobertura.xml dotnet test` (no threshold option).
 
 Then `python <skill-dir>/scripts/complexity_gate.py src --coverage coverage/coverage.cobertura.xml --top 20`.
@@ -248,7 +251,7 @@ Agents copy whichever HTTP call, retry loop or logger they saw last. Agree one w
 | Concern | One sanctioned way (example) | Enforced by |
 |---|---|---|
 | Service calls (HTTP/gRPC) | typed clients from `IHttpClientFactory` (`AddHttpClient<TClient, TImpl>`), all in `App.Infrastructure.Http`, `BaseAddress` and `Timeout` set there; gRPC through the client factory too | RS0030 bans `new HttpClient(...)`; ArchUnitNET keeps `HttpClient` in that namespace |
-| Retries, timeouts | `Microsoft.Extensions.Http.Resilience`: one `AddStandardResilienceHandler()` per client (retry, circuit breaker, attempt and total timeouts; don't stack handlers); Polly v8 `ResiliencePipeline` for non-HTTP work | RS0030 bans `Thread.Sleep`, so hand-rolled retry loops fail |
+| Retries, timeouts | `Microsoft.Extensions.Http.Resilience`: one `AddStandardResilienceHandler()` per client (retry, circuit breaker, attempt and total timeouts; don't stack handlers); Polly v8 `ResiliencePipeline` for non-HTTP work | RS0030 bans `Thread.Sleep`, and the semgrep rule below fails `await Task.Delay` inside a loop, so hand-rolled retry loops fail |
 | Logging | `ILogger<T>` with `[LoggerMessage]` source-generated methods; correlation id through `BeginScope` (or the ASP.NET Core trace id) | RS0030 bans `System.Console` (see BannedSymbols.txt above) |
 | Errors | `AddProblemDetails()` + `UseExceptionHandler()` + one `IExceptionHandler` mapping domain exceptions | Sonar S2139 (log and rethrow), CA1031 (catch general exception) |
 
@@ -276,6 +279,29 @@ M:System.Threading.Thread.Sleep(System.TimeSpan);Retries go through the resilien
 ```
 
 A project that needs an exception gets its own `BannedSymbols.<Name>.txt` or removes the shared file with `<AdditionalFiles Remove=...>`; review either change like a baseline edit.
+
+RS0030 cannot see where a call sits, and banning `Task.Delay` outright would hit legitimate single waits, so `.semgrep/conventions.yml` catches the async retry loop (tested with semgrep 1.182 on `for`, `for (;;)`, `foreach`, `await foreach`, `while` and `do` loops, braced or not, with and without `ConfigureAwait`; a `Task.Delay` outside a loop and files under the excluded path pass):
+
+```yaml
+rules:
+  - id: no-hand-rolled-retry
+    languages: [csharp]
+    severity: ERROR
+    message: Task.Delay in a loop is a hand-rolled retry or poll. Use the resilience pipeline; for periodic work, PeriodicTimer.
+    paths: { exclude: ["/src/App/Infrastructure/Resilience/"] }   # where Polly pipelines are built
+    patterns:
+      - pattern-either:
+          - pattern-inside: "for (...;...;...) ..."
+          - pattern-inside: "for (;;) ..."
+          - pattern-inside: "foreach (var $X in $E) ..."   # also matches explicitly typed loops
+          - pattern-inside: "await foreach (var $X in $E) ..."
+          - pattern-inside: "while (...) ..."
+          - pattern-inside: "do ... while (...);"
+      - pattern-either:
+          - pattern: await Task.Delay(...)
+          - pattern: await Task.Delay(...).ConfigureAwait(...)
+          - pattern: await System.Threading.Tasks.Task.Delay(...)
+```
 
 ```csharp
 [Fact] public void Only_the_http_layer_touches_HttpClient() =>
@@ -314,7 +340,7 @@ public class ArchitectureTests
 - Roslyn has no baseline file. Raise rules to `error` globally and add `[legacy/**.cs]` sections that lower named rules to `warning`; the section list may only shrink. Never `NoWarn` a gate rule project-wide.
 - `suppression_audit.py --write-baseline .quality/suppressions.json`, then `--baseline` in the audit line.
 - Sonar "new code" gating needs SonarQube/SonarCloud; the NuGet analyzer has no equivalent.
-- Coverage: `diff-cover coverage/coverage.cobertura.xml --compare-branch=origin/main --fail-under=70` (Strict: 100), with the global coverlet `Threshold` at today's value.
+- Coverage: the diff-cover line in `make quality` already gates changed lines (70, Strict: 100); set the global coverlet `Threshold` to today's value and raise it as coverage grows.
 - Mutation: `dotnet stryker --since:main` or `--with-baseline:main`. Duplication: `npx jscpd src --baseline-from-ref origin/main --fail-on-new-clones 0`.
 
 ## Pre-commit wiring

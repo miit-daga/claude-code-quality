@@ -57,15 +57,15 @@ Python: mypy, pyright, basedpyright. Ruby: Sorbet, Steep (RBS). PHP: PHPStan, Ps
 
 | Language | HTTP client | Retries / resilience | Logging |
 |---|---|---|---|
-| Java | java.net.http.HttpClient, Spring RestClient / WebClient, OkHttp, Feign | Resilience4j, Spring Retry, Failsafe | SLF4J with Logback or Log4j2 |
+| Java | java.net.http.HttpClient, Spring RestClient / WebClient, OkHttp, Feign | Resilience4j, Spring Framework 7 core retry (the separate Spring Retry project is archived), Failsafe | SLF4J with Logback or Log4j2 |
 | Kotlin | Ktor client, OkHttp, Spring clients | Resilience4j, Arrow resilience | SLF4J, kotlin-logging |
-| Python | httpx, requests, aiohttp | tenacity, stamina, backoff | stdlib logging with a JSON formatter, structlog, loguru |
+| Python | httpx, requests, aiohttp | tenacity, stamina, backoff (the Python package) | stdlib logging with a JSON formatter, structlog, loguru |
 | TypeScript / JS | fetch / undici, ky, got, axios | p-retry, cockatiel, opossum | pino, winston |
-| Go | net/http, resty | hashicorp/go-retryablehttp, cenkalti/backoff, failsafe-go | log/slog, zap, zerolog |
+| Go | net/http, resty | cenkalti/backoff, failsafe-go, hashicorp/go-retryablehttp (its default policy also retries POST) | log/slog, zap, zerolog |
 | C# | HttpClient via IHttpClientFactory, Refit | Polly, Microsoft.Extensions.Http.Resilience | Microsoft.Extensions.Logging, Serilog |
 | PHP | Guzzle, Symfony HttpClient | Guzzle retry middleware, Symfony RetryableHttpClient | Monolog |
 | Ruby | Faraday, Net::HTTP, HTTP.rb | faraday-retry, retriable | Rails.logger, semantic_logger, Lograge |
-| Rust | reqwest, hyper | reqwest-retry, backoff, tower retry | tracing, log |
+| Rust | reqwest, hyper | backon, reqwest-retry, tower retry (the `backoff` crate is unmaintained, RUSTSEC-2025-0012) | tracing, log |
 
 ## Observability
 

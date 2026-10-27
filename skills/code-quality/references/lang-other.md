@@ -1,7 +1,12 @@
 # Other languages: Elixir, Scala, Swift, C/C++, and the universal kit
 
-Each section maps the gates to native tools, then gives install, config and the one command. The
-bundled scripts live in `S=<skill-dir>/scripts`. Two traps apply everywhere:
+Each section maps the gates to native tools, then gives install, config and the one command. Copy
+the bundled scripts into the project (`cp <skill-dir>/scripts/*.py tools/quality/`, since CI cannot
+see the skill folder) and use `S=tools/quality`. Changed lines are held to the coverage floor too
+(70%, Strict 100%) by diff-cover (`pip install diff-cover`), which reads lcov, Cobertura, Clover and
+JaCoCo. CI needs the base branch fetched, an empty diff passes, and Strict adds
+`--total-percent-float` because the total is otherwise truncated (99.6% reads as 99). Two traps
+apply everywhere:
 
 - **lizard parses about 27 languages** (cpp, java, csharp, javascript, python, objectivec,
   ruby, php, swift, scala, go, lua, rust, typescript, kotlin, erlang, zig, …) **but not Elixir**.
@@ -23,9 +28,9 @@ Strict values (100% coverage, zero survivors, 50-line functions) are noted where
 | Cognitive < 22 | none native; Credo `Refactor.PerceivedComplexity` is a cyclomatic variant | `max_complexity: 21`. Not in the default config, so add it |
 | Halstead < 80 | `halstead_gate.py` (multimetric handles `.ex`) | per file, advisory unless `--file-max` is set |
 | File < 500 / comments / suppressions | `loc_budget.py`, `comment_density.py`, `suppression_audit.py` | the audit counts `credo:disable` |
-| Coverage ≥ 70% (Strict: 100%) | excoveralls `minimum_coverage: 70` via `mix coveralls`, or built-in `test_coverage: [summary: [threshold: 70]]` | **line coverage only**: BEAM `cover` has no branch coverage. Say so in the report |
+| Coverage ≥ 70% (Strict: 100%) | excoveralls `minimum_coverage: 70` via `mix coveralls`, or built-in `test_coverage: [summary: [threshold: 70]]` | **line coverage only**: BEAM `cover` has no branch coverage. Say so in the report. Changed lines: diff-cover on the Cobertura file (below) |
 | CRAP < 25 | no lizard support, so no script | Strict: follows from CCN ≤ 21 plus 100% coverage (CRAP = CCN at full coverage). Standard: report it as not enforced |
-| Mutation ≥ 80% (Strict: 0 survivors) | `muex` 0.12 (maintained) | `mix muex --since origin/main --coverage-guided --fail-at 80` (Strict: `--fail-at 100`). The docs don't say whether "No coverage" mutants count in the score (verify for your version). muzak and exavier are unmaintained |
+| Mutation ≥ 80% (Strict: 0 survivors) | `muex` 0.12 (maintained) | `mix muex --since origin/main --coverage-guided --fail-at 80`. `--fail-at` is an integer percent compared with killed / (killed + survived + timeout). By default muex skips low-scoring files (filter, min score 20) and prunes to at most 20 mutants per function, so Strict adds `--no-filter --no-optimize` to `--fail-at 100`. muzak and exavier are unmaintained |
 | Dead code | compiler warnings (unused private functions and variables) + `--warnings-as-errors`; `mix_unused` for public functions; `mix deps.unlock --check-unused` | `mix xref unreachable` no longer does anything (moved into the compiler) |
 | Duplication | Credo `Design.DuplicatedCode` (disabled by default) + jscpd `format: ["elixir"]` | `mass_threshold: 40` default |
 | No `any()`/`term()` | no Credo check exists | `grep` gate below, or a custom check (`mix credo.gen.check`) |
@@ -41,7 +46,7 @@ Strict values (100% coverage, zero survivors, 50-line functions) are noted where
 test_coverage: [tool: ExCoveralls],
 dialyzer: [flags: [:unmatched_returns, :error_handling, :underspecs, :extra_return, :missing_return],
            plt_file: {:no_warn, "priv/plts/project.plt"}],
-# and: def cli, do: [preferred_envs: [coveralls: :test, "coveralls.lcov": :test]]   # Elixir 1.15+
+# and: def cli, do: [preferred_envs: [coveralls: :test, "coveralls.cobertura": :test]]   # Elixir 1.15+
 # deps: {:credo, "~> 1.7", only: [:dev, :test], runtime: false}, {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
 #       {:excoveralls, "~> 0.18", only: :test}, {:stream_data, "~> 1.0", only: :test}, {:muex, ...}, {:boundary, ...}
 ```
@@ -63,8 +68,8 @@ dialyzer: [flags: [:unmatched_returns, :error_handling, :underspecs, :extra_retu
 
 `coveralls.json`: `{"coverage_options": {"minimum_coverage": 70}}` (Strict: 100). Only `mix coveralls`,
 `coveralls.detail`, `.html` and `.cobertura` enforce the minimum. `coveralls.lcov`
-("experimental"), `.json` and `.xml` do not, so run `mix coveralls` as the gate and the lcov
-task for reports. Ignore markers `# coveralls-ignore-start/-stop/-next-line` are escape
+("experimental"), `.json` and `.xml` do not, so run `mix coveralls.cobertura` as the gate: it
+enforces the minimum and writes the Cobertura file diff-cover reads. Ignore markers `# coveralls-ignore-start/-stop/-next-line` are escape
 hatches: grep for them. Built-in `mix test --cover` exits with status **3** below the
 threshold (the docs say 1).
 
@@ -75,8 +80,18 @@ if grep -rnE '@(spec|type|typep|callback|opaque).*\b(any|term)\(\)' lib; then ex
 if grep -rn 'coveralls-ignore' lib; then exit 1; fi
 npx --yes jscpd lib && python3 $S/loc_budget.py lib test && python3 $S/halstead_gate.py lib
 python3 $S/comment_density.py lib --fail-on-commented-code && python3 $S/suppression_audit.py lib test --zero todo
-MIX_ENV=test mix coveralls && mix muex --since origin/main --coverage-guided --fail-at 80   # muex 0.12 docs
+MIX_ENV=test mix coveralls.cobertura   # enforces minimum_coverage; writes cover/cobertura.xml (verify the path)
+diff-cover cover/cobertura.xml --compare-branch=origin/main --fail-under=70   # Strict: --fail-under=100 --total-percent-float
+# Strict: --fail-at 100 --no-filter --no-optimize
+if ! out=$(mix muex --since origin/main --coverage-guided --fail-at 80 2>&1); then
+  grep -q "No mutations to test" <<<"$out" || { echo "$out"; exit 1; }
+fi
+echo "$out"
 ```
+
+`mix muex` raises (non-zero exit) when the diff leaves nothing to mutate, unless `--fail-at 0`, so
+without the `grep` every docs-only or config-only change would fail. The muex escript exits 0 in
+that case and needs no wrapper.
 
 Legacy ratchet: `mix credo diff --from-git-ref origin/main` (only new issues), a dialyzer
 `ignore_warnings` file that may only shrink, `muex --since`. Pre-commit: lefthook running
@@ -88,7 +103,7 @@ Legacy ratchet: `mix credo diff --from-git-ref origin/main` (only new issues), a
 |------|------|---------|
 | Cyclomatic, cognitive, params, NLOC, nesting | lizard via `complexity_gate.py` and `lizard -Ecognitive -ENS` | **caveat**: lizard truncates brace-less bodies (`def f = x match {...}`, Scala 3 indentation syntax). Check it on your code. scalastyle is unmaintained, and scapegoat is maintained (its complexity inspections: verify) |
 | Halstead / file length / comments / suppressions | `halstead_gate.py`, `loc_budget.py`, `comment_density.py`, `suppression_audit.py` | the audit counts `@SuppressWarnings` |
-| Coverage ≥ 70% statement + branch (Strict: 100%) | sbt-scoverage | `coverageMinimumStmtTotal := 70`, `coverageMinimumBranchTotal := 70`, `coverageFailOnMinimum := true` (passes when actual >= min). Scala 3 needs 3.2+ |
+| Coverage ≥ 70% statement + branch (Strict: 100%) | sbt-scoverage; diff-cover on its Cobertura for changed lines | `coverageMinimumStmtTotal := 70`, `coverageMinimumBranchTotal := 70`, `coverageFailOnMinimum := true` (passes when actual >= min). Scala 3 needs 3.2+ |
 | CRAP < 25 | `complexity_gate.py --coverage target/scala-*/coverage-report/cobertura.xml` | |
 | Mutation ≥ 80% on covered code (Strict: 0 survivors) | stryker4s (`sbt stryker`, `json` reporter) + `mutation_score.py` | stryker4s' `thresholds.break` gates the total score (NoCoverage counts as not killed), so leave it at 0 and gate the JSON report (below) |
 | Dead code | `-Wunused:all` (3.3.4+; 2.13: `-Wunused`) + `-Werror`; scalafix `RemoveUnused` fixes it | scalafix docs suggest `-Wconf:cat=unused:info` while auto-fixing |
@@ -119,6 +134,7 @@ stryker4s { mutate: ["src/main/scala/**/*.scala"], reporters: ["console", "html"
 ```bash
 sbt "scalafixAll --check" clean coverage test coverageReport    # fails below 70% stmt/branch
 python3 $S/complexity_gate.py src/main --coverage target/scala-*/coverage-report/cobertura.xml
+diff-cover target/scala-*/coverage-report/cobertura.xml --compare-branch=origin/main --fail-under=70   # Strict: --fail-under=100 --total-percent-float
 sbt stryker   # writes target/stryker4s-report/<epoch-millis>/report.json (mutation-testing-elements schema)
 python3 $S/mutation_score.py "$(ls -d target/stryker4s-report/*/ | sort | tail -1)report.json" --min-covered 80   # Strict: --max-survived 0
 ```
@@ -140,7 +156,7 @@ work on Scala 2 and 3.3.4+. Every exclusion needs a reason.
 | Halstead / comments / suppressions | `halstead_gate.py`, `comment_density.py`, `suppression_audit.py` | the audit counts `swiftlint:disable` |
 | Coverage ≥ 70% line + branch (Strict: 100%) | `swift test --enable-code-coverage` → `llvm-cov export -format=lcov` → `lcov_gate.py` (universal section) | llvm-cov has no fail-under. For Xcode projects, xcov `--minimum_coverage_percentage 70` |
 | CRAP < 25 | `complexity_gate.py --coverage lcov.info` | |
-| Mutation ≥ 80% on covered code (Strict: 0 survivors) | Muter (macOS) | no score flag. `--format json` writes `globalMutationScore` = killed / all mutants except build errors (timeouts count as not killed). Files at or below `coverageThreshold` (default 0) are not mutated, so the score covers tested files only. Gate it with `jq` (below) |
+| Mutation ≥ 80% on covered code (Strict: 0 survivors) | Muter 16 (macOS) | no score flag. `--format json` writes `globalMutationScore` = (failed + runtime errors) / every outcome except build errors, ×100 and truncated; survivors and timeouts count against it, and it is -1 with no results. The coverage step (on unless `--skip-coverage`) skips files with no coverage, so this is a **total score over covered files**: inside a covered file, mutants on untested lines still count. Gate it with `jq` (below) |
 | Dead code | SwiftLint analyzer rules `unused_declaration`, `unused_import` (`swiftlint analyze --compiler-log-path build.log`); Periphery `scan --strict` | Periphery's open-source repo is archived (now commercial); 3.8.0 is the last free release |
 | Duplication | jscpd `format: ["swift"]` | |
 | No `Any` / `AnyObject` | ast-grep rule below | also opt-in `force_unwrapping`, `implicitly_unwrapped_optional`; `force_cast`/`force_try` are on by default |
@@ -166,10 +182,12 @@ BIN=$(find .build/debug -name '*PackageTests' -path '*MacOS*' | head -1)   # mac
 xcrun llvm-cov export -format=lcov "$BIN" -instr-profile .build/debug/codecov/default.profdata \
   -ignore-filename-regex='(\.build|Tests)/' > lcov.info
 python3 lcov_gate.py lcov.info 70 && python3 $S/complexity_gate.py Sources --coverage lcov.info
+diff-cover lcov.info --compare-branch=origin/main --fail-under=70   # Strict: --fail-under=100 --total-percent-float
 muter run --format json --output muter.json && jq -e '.globalMutationScore >= 80' muter.json   # Strict: == 100
 ```
 
-Muter's fields and formula are from the Muter 17 source (verify for your version).
+Muter's fields and formula are from the Muter 16 source (verify for your version). A score of -1
+(nothing mutated, for example because no file is covered) fails the `jq` check, as it should.
 
 **Formatter is the org's or user's choice**: Apple's swift-format (`swift format`, bundled with
 recent toolchains) or Nick Lockwood's SwiftFormat; SwiftLint stays the linter either way. The
@@ -191,7 +209,7 @@ Google, Chromium, Mozilla, WebKit, Microsoft and GNU; an org `.clang-format` win
 | Cognitive < 22 | clang-tidy `readability-function-cognitive-complexity` | `Threshold: 21` (default 25; flags Total > Threshold) |
 | Function size, params, nesting | clang-tidy `readability-function-size` | `LineThreshold: 60` (Strict: 50; physical lines, not NLOC), `ParameterThreshold: 5`, `NestingThreshold: 4` (the function body itself is level 1, so 4 allows three nested control blocks). All default to none except `StatementThreshold` 800 |
 | Halstead / file / comments / suppressions | `halstead_gate.py`, `loc_budget.py`, `comment_density.py`, `suppression_audit.py` | the audit counts `NOLINT`, and a bare `NOLINT` without `(check)` counts as blanket |
-| Coverage ≥ 70% line + branch (Strict: 100%) | gcovr | `--fail-under-line 70 --fail-under-branch 70` (exit 2 / 4) |
+| Coverage ≥ 70% line + branch (Strict: 100%) | gcovr; diff-cover for changed lines | `--fail-under-line 70 --fail-under-branch 70` (exit 2 / 4) |
 | CRAP < 25 | `complexity_gate.py --coverage build/coverage.xml` (gcovr `--cobertura`) | |
 | Mutation ≥ 80% on covered code (Strict: 0 survivors) | Mull 0.35 `mull-runner --reporters Elements` + `mutation_score.py` | Mull's own `--mutation-score-threshold` (default 100) divides by all mutants including not-covered ones, so pass `--allow-surviving` and gate the Elements JSON. Strict: drop `--allow-surviving` |
 | Dead code | cppcheck `--enable=unusedFunction`; `-Wall -Wextra -Werror` (unused variables, parameters, static functions); GNU ld `-ffunction-sections -Wl,--gc-sections -Wl,--print-gc-sections` | unusedFunction is silently disabled with `-j` > 1 unless `--cppcheck-build-dir` is set |
@@ -223,6 +241,7 @@ cppcheck --project=build/compile_commands.json --enable=warning,style,unusedFunc
 gcovr --root . --filter src/ --fail-under-line 70 --fail-under-branch 70 \
   --exclude-throw-branches --exclude-unreachable-branches --cobertura build/coverage.xml --lcov build/lcov.info
 python3 $S/complexity_gate.py src --coverage build/coverage.xml
+diff-cover build/coverage.xml --compare-branch=origin/main --fail-under=70   # Strict: --fail-under=100 --total-percent-float
 ```
 
 `--exclude-throw-branches` and `--exclude-unreachable-branches` drop compiler-generated
@@ -250,6 +269,7 @@ The universal kit, for anything without a better native tool:
 | Cognitive, nesting | lizard 1.24+ extensions | `lizard -Ecognitive -Tcognitive_complexity=21 -ENS -Tmax_nested_structures=3 -w src` (exit 1 on any warning; `-i N` tolerates N). `-ENS` is accurate for brace languages but over-counts indentation-based ones (Python, Elixir-style `do` blocks): use their native nesting rule there |
 | Halstead < 80 | multimetric via `halstead_gate.py` | per file for non-Python, using Pygments lexers (most languages); advisory unless you calibrate a per-file budget with `--file-max` |
 | File < 500 | `loc_budget.py` | `--ext` to restrict extensions |
+| Changed-line coverage ≥ 70% | diff-cover | `diff-cover <lcov or cobertura> --compare-branch=origin/main --fail-under=70` (Strict: `--fail-under=100 --total-percent-float`) |
 | Duplication | jscpd 5 (Rust rewrite, 200+ formats) | `npx --yes jscpd --threshold 0 --min-tokens 50 --format <fmt> src`. `threshold` fails when duplication % > value; markers `jscpd:ignore-start` / `jscpd:ignore-end` |
 | Any-type and invariant rules | semgrep (`semgrep scan --config .semgrep.yml --error`) or ast-grep (`ast-grep scan`, exit 1 on `severity: error`) | ast-grep supports Elixir, Swift and C++. Suppression comment: `// ast-grep-ignore: rule-id` |
 | Comments, escape hatches, TODO | `comment_density.py --fail-on-commented-code`, `suppression_audit.py --zero todo` | the audit knows the markers listed in its header; grep for others |
