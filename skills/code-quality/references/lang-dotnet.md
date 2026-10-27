@@ -288,7 +288,7 @@ rules:
     languages: [csharp]
     severity: ERROR
     message: Task.Delay in a loop is a hand-rolled retry or poll. Use the resilience pipeline; for periodic work, PeriodicTimer.
-    paths: { exclude: ["/src/App/Infrastructure/Resilience/"] }   # where Polly pipelines are built
+    paths: { exclude: ["**/App/Infrastructure/Resilience/"] }   # where Polly pipelines are built
     patterns:
       - pattern-either:
           - pattern-inside: "for (...;...;...) ..."

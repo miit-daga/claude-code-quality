@@ -235,8 +235,8 @@ rules:
       - pattern-regex: (?i)insert\s+into\s+users\b
     paths:
       exclude:
-        - app/users/repository.py
-        - migrations/
+        - "**/app/users/repository.py"
+        - "**/migrations/"
 ```
 
 Run `semgrep --config .semgrep/ --error` in `quality-fast`. Agents are good at writing

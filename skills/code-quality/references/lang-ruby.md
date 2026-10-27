@@ -362,7 +362,7 @@ logging is `Rails.logger` with a JSON formatter or rails_semantic_logger; errors
     languages: [ruby]
     severity: ERROR
     message: Call other services through app/clients (timeouts, retries and logging live there).
-    paths: { exclude: ["/app/clients/"] }
+    paths: { exclude: ["**/app/clients/"] }
     pattern-either:
       - pattern: Net::HTTP.$M(...)
       - pattern: Faraday.new(...)
@@ -372,7 +372,7 @@ logging is `Rails.logger` with a JSON formatter or rails_semantic_logger; errors
     languages: [ruby]
     severity: ERROR
     message: Hand-rolled retry. Use the client's retry middleware or the shared retry helper.
-    paths: { exclude: ["/app/clients/"] }
+    paths: { exclude: ["**/app/clients/"] }
     pattern-either:
       - pattern: "begin\n  ...\nrescue ...\n  ...\n  retry\nend"
       - pattern: "def $M(...)\n  ...\nrescue ...\n  ...\n  retry\nend"

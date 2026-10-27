@@ -224,7 +224,7 @@ rules:
                   ...
     paths:
       exclude:
-        - src/infra/retry*
+        - "**/infra/retry*"
   - id: hand-rolled-retry-ts
     languages: [typescript, javascript]
     severity: ERROR
@@ -252,11 +252,14 @@ rules:
               do { ... } while ($C)
     paths:
       exclude:
-        - src/infra/retry*
+        - "**/infra/retry*"
 ```
 
 Adjust the exclude path to the project's sanctioned module (the template above uses
-`src/infra/retry`). Two things it cannot see: a sleep helper imported under another
+`src/infra/retry`). Keep the `**/` prefix and the quotes: outside a git repository,
+semgrep reads a plain `src/...` path relative to the folder being scanned, so
+`semgrep scan src` would flag the sanctioned module itself, and YAML treats an unquoted
+leading `*` as an alias. Two things it cannot see: a sleep helper imported under another
 name (`import { setTimeout as pauseFor }`; add the alias to the regex), and a retry loop
 that doesn't sleep at all. The census below and code review cover those.
 

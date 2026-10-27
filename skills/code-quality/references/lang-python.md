@@ -350,7 +350,7 @@ One sanctioned module per concern: `shop/adapters/http.py` for service calls and
       languages: [python]
       severity: ERROR
       message: Retry or poll through shop.adapters.retry, not a sleep inside a loop.
-      paths: { exclude: ["/src/shop/adapters/retry.py"] }
+      paths: { exclude: ["**/shop/adapters/retry.py"] }
       patterns:
         - pattern-either:
             - pattern-inside: "for $X in $ITER:\n  ..."

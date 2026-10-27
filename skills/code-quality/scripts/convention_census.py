@@ -162,7 +162,7 @@ VARIANTS = [
     v("logging", "error_log / var_dump / print_r", r"\b(error_log|var_dump|print_r|dump|dd)\(", PHP),
     v("logging", "Monolog / PSR-3", r"(Monolog\\|Psr\\Log\\LoggerInterface)", PHP),
     v("logging", "println! / eprintln! / dbg!", r"\b(println!|eprintln!|dbg!)", RS),
-    v("logging", "log / tracing / slog crates", r"\b(log::(info|warn|error|debug|trace)|tracing::|slog::)", RS),
+    v("logging", "log / tracing / slog crates", r"\b(log::(info|warn|error|debug|trace)\b|use log::|tracing::|slog::)", RS),
 ]
 CONCERNS = sorted({var.concern for var in VARIANTS})
 COMPILED = [(var, re.compile(var.pattern)) for var in VARIANTS]

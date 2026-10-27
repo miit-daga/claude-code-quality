@@ -348,7 +348,7 @@ rules:
     languages: [scala]
     severity: ERROR
     message: Call services through app.http.Client (timeouts, retries); log through the app logger.
-    paths: { exclude: ["/src/main/scala/app/http/"] }
+    paths: { exclude: ["**/main/scala/app/http/"] }
     pattern-either:
       - pattern: scala.io.Source.fromURL(...)
       - pattern: java.net.http.HttpClient.newHttpClient()

@@ -69,7 +69,7 @@ user's say-so.
 | 2 | Cognitive complexity (per function) | < 22 | < 22 | Penalises nesting and broken flow, which cyclomatic misses |
 | 3 | Halstead difficulty (per function) | < 80 | < 80 | Catches dense, operator-heavy code that is short but hard to read. Gated per function where the tool supports it (Python); per-file scores (other languages) are advisory unless the project calibrates a per-file budget |
 | 4 | Lines per file | < 500 | < 500 | Keeps every file loadable in one read, for humans and agents |
-| 5 | Test coverage (line **and** branch), project-wide **and** on changed lines | ≥ 70% | 100% | A floor, not a quality measure: coverage only shows code ran. Past ~70–80% extra tests are mostly toil, so the test-quality gate is mutation score. The changed-line check (diff coverage) stops untested new code from hiding under a healthy project total |
+| 5 | Test coverage: line **and** branch project-wide, plus lines changed by each change | ≥ 70% | 100% | A floor, not a quality measure: coverage only shows code ran. Past ~70–80% extra tests are mostly toil, so the test-quality gate is mutation score. The changed-line check (diff coverage) stops untested new code from hiding under a healthy project total |
 | 6 | CRAP per function | < 25 | < 25 | Complexity × lack of coverage. Below 100% coverage it keeps untested code simple: at 70% coverage it caps complexity at 17, at 0% at 4 |
 | 7 | Mutation score on covered, changed code | ≥ 80% | 0 survivors | Proves tests check behaviour, not just execute lines. Measured on covered code (`scripts/mutation_score.py` or the tool's covered-code option) so it doesn't repeat coverage. Changed code with mutants but no covered ones fails |
 | 8 | Dead code | 0 | 0 | Unused functions, exports, files, params, deps |
@@ -180,7 +180,7 @@ Every change must pass `make quality` before you say it is done.
 - Functions: cyclomatic < 22, cognitive < 22, Halstead difficulty < 80, ≤ 5 params, nesting ≤ 3,
   ≤ 60 lines (≤ 100 in Java/Kotlin/C#/PHP). Don't split a cohesive function just to get shorter
 - Files: < 500 lines. Split by responsibility, never by line count
-- Tests: ≥ 70% line and branch coverage, both project-wide and on the lines a change touches;
+- Tests: ≥ 70% line and branch coverage project-wide, and ≥ 70% of the lines a change touches;
   CRAP < 25; mutation score ≥ 80% on covered changed code (Strict: 100% coverage, zero
   surviving mutants). Every test asserts observable behaviour
 - Service calls, retries, timeouts, logging and errors go through the modules named in
