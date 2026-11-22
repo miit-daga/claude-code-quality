@@ -163,7 +163,10 @@ Details and snippets are in `references/agent-loop.md`.
    Stop hook that runs the fast gates before the agent says "done". Use the
    `update-config` skill (or show the user the JSON) to add these, since they change
    Claude Code settings.
-2. **Pre-commit**: pre-commit / lefthook / husky+lint-staged on staged files.
+2. **Pre-commit**: pre-commit / lefthook / husky+lint-staged on staged files, with the
+   formatter from the very first commit (Prettier, ruff format, gofmt, Spotless...). Follow
+   "Pre-commit rules that matter" in `references/agent-loop.md`: staged files only, fixes
+   re-staged or the commit stopped, versions pinned equal to CI, CI still runs `format --check`.
 3. **CI**: the full `quality` command on every push or PR, including coverage, mutation
    on changed code, and dead code. CI is the layer that can't be bypassed locally.
 
@@ -270,6 +273,11 @@ only fall. A baseline grows only with the user's approval for a documented excep
 a yes before installing.
 
 ### B4. Install the gates before cleaning
+
+**Adding a formatter to code that never had one** is its own small project; follow
+"Adopting a formatter in an existing codebase" in `references/agent-loop.md` (separate
+formatting-only PR, a CI guard so the changed-line gates don't judge reformatted old code,
+re-measured line limits, and an "existing code may not grow" rule).
 
 Do A3–A5 (tools, `quality` command, three layers, budgets in CLAUDE.md/AGENTS.md).
 In ratchet mode, also generate the baselines now (`suppression_audit.py
@@ -430,6 +438,8 @@ packages, exit 1 on failure, and take `--exclude` globs. Run with `--help` for t
 | `scripts/mutation_score.py` | mutation score from Stryker, PIT, mutmut, gremlins and cargo-mutants reports, on covered code (default ≥ 80%) or total; fails when changed code has mutants but none covered; `--max-survived 0` for Strict | – |
 | `scripts/convention_census.py` | counts each way of calling services, retrying and logging per module (10 languages); sanctioned paths via `--allow`; baseline that may only shrink; `--zero` once converged | – |
 | `scripts/suppression_audit.py` | lint/coverage/mutation suppressions, skipped tests, any-types (catch variables and `--any-type-allow` boundary files exempt), TODOs; blanket check; ratchet baseline | – |
+| `scripts/format_only_ruff.py` | "formatting-only PR?" guard for Python/ruff: prints `true` only when every changed file equals `ruff format` of its merge-base version (any add/delete/rename, settings change or other file → `false`); copy into the repo and run the base branch's copy in CI (see "Adopting a formatter" in `references/agent-loop.md`). Adjust `FORMATTER_SETTINGS` to the repo | `ruff` (dev dependency) |
+| `scripts/format-only-prettier.mjs` | the same guard for Prettier (Node ESM; copy into the repo next to `node_modules`); adjust `SETTINGS` and the `.github/` exclusion to the repo | `prettier` (dev dependency) |
 
 Prefer a native tool when the language has a good one (for example ESLint `complexity`
 over lizard for TS) because it runs in the editor too. The scripts cover languages and

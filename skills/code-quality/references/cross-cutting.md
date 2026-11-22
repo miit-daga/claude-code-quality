@@ -150,6 +150,23 @@ them inside the sanctioned client, never at call sites.
 - **No secrets or personal data.** Redact in the logger setup, not at every call site.
 - **Correlation.** Middleware puts the request or trace ID in the logging context, so
   every line of a request carries it.
+- **Wire it, then prove it.** A real monorepo shipped a `sanitizeLogData()` that nothing
+  called, while its error middleware logged the full `req.body` (passwords on a failed
+  login). Redaction must sit inside the logger's format/processor, and the convention census
+  must show zero raw logger calls outside the setup module.
+- **One logger setup, shared, not copy-pasted** into each service: copies drift (that repo
+  had three variants). Publish it as an internal package or a shared module.
+- **Containers and serverless (Cloud Run, Lambda): JSON to stdout only.** No file
+  transports; the disk is temporary and the platform collects stdout. Map levels to the
+  platform's severity field.
+- **One logger per process,** child loggers per module for the name. A logger per module
+  that opens its own files and registers its own crash handlers multiplies file handles
+  and exception handlers.
+- **Check timestamp format tokens.** `HH:mm:ss:ms` in winston/fecha prints minutes and
+  seconds again; milliseconds are `SSS`.
+- **No redacting logger by decision?** Then make it a review rule: every PR review flags
+  new log lines that print an email, a person's name or a whole user/request object, and
+  put that rule where reviews always see it (project CLAUDE.md checklist, PR template).
 
 ## 8. Errors
 

@@ -169,6 +169,8 @@ exits 1 on failure:
 | `convention_census.py` | counts each way the code calls services, retries and logs, per module, with a baseline that may only shrink |
 | `comment_density.py` | comment ratio, narrating comments, commented-out code |
 | `suppression_audit.py` | lint, coverage and mutation suppressions, skipped tests, `any`-style types and TODOs across languages, with a baseline that may only shrink |
+| `format_only_ruff.py` | "formatting-only PR?" guard for adopting ruff format in an existing codebase: prints `true` only when every changed file is `ruff format` of its merge-base version, so CI can skip changed-line gates for that one PR (needs `ruff`) |
+| `format-only-prettier.mjs` | the same guard for Prettier (Node; needs `prettier`) |
 
 The skill copies the scripts into each project (`tools/quality/`) so CI and teammates
 have them.

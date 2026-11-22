@@ -237,6 +237,82 @@ pre-push:
 `git commit --no-verify` skips every pre-commit framework. That is why CI (layer 3)
 is the real gate, and why the agent rules say never to use `--no-verify`.
 
+### Pre-commit rules that matter
+
+Learned from two real setups (a Node monorepo whose hook did it wrong, and a Python +
+Next.js rollout):
+
+- **Staged files only.** Never run `prettier --write .`, `eslint --fix .` or `ruff format .`
+  on the whole tree in a hook: it rewrites files the developer did not touch, and if the
+  hook does not re-stage, the commit goes in unformatted while the fixes stay behind as
+  local changes (the monorepo bug). lint-staged re-stages its fixes automatically; the
+  pre-commit framework stops the commit when a hook changed a file ("files were modified
+  by this hook"), so the developer looks, `git add`s and commits again. Both are fine.
+- **Formatter owns style, linter owns code.** Put `eslint-config-prettier` (flat:
+  `eslint-config-prettier/flat`) last in the ESLint config so no layout rule fights
+  Prettier. Don't use `eslint-plugin-prettier`: it is slow and turns style into lint errors.
+- **Only whole-file-safe rules in the hook.** Rules judged on changed lines (complexity,
+  size, coverage) can't be evaluated in a hook (it has no base branch); keep them in CI.
+  An `eslint --fix` on whole staged files is fine as long as the old warnings are warnings.
+- **Pin the hook's tool to the same version as CI.** pre-commit: `rev:` is a commit SHA
+  with `# frozen: vX.Y.Z` and must equal the pin in the dev requirements, or the hook and
+  CI format differently. Node: exact devDependency pins (`--save-exact`); pick versions
+  that have been out a couple of weeks.
+- **Restrict file types.** ruff-pre-commit's `ruff-format` also formats Markdown code
+  blocks by default; set `types_or: [python, pyi]` and `files: ^api/` (or wherever the code is).
+- **Worktrees share hooks.** `pre-commit install` writes to the shared `.git/hooks` and then
+  refuses commits on branches that don't have the config yet: use
+  `pre-commit install --allow-missing-config`. husky's `prepare` without a `.git` (Docker
+  `npm ci`) prints ".git can't be found" and exits 0, so it doesn't break image builds.
+- **CI is the gate.** The hook is a convenience; CI must run `format --check` (and the
+  same lint) so `--no-verify` or a clone without hooks is still caught.
+- **Lockfile churn.** Installing the new devDependencies with a newer npm than the one
+  that wrote the lockfile can rewrite unrelated fields (npm 11 dropped `libc` from optional
+  platform packages). Check that the lockfile diff only adds entries.
+
+### Adopting a formatter in an existing codebase
+
+Formatting old code is one huge diff that the changed-line gates (diff-quality, size
+limits, changed-line coverage) would judge as if the PR had written it all. Roll it out
+in this order, one PR each:
+
+1. **Tooling PR**: formatter config, hooks, docs, and a CI guard step "Formatting-only
+   change?" (below). No reformatting yet.
+2. **Limits PR**: re-measure line-based limits and add "existing code may not grow" (below).
+3. **Formatting PR**: run the formatter over everything and add `format --check` to CI.
+   Nothing else in it. Merge it right after 1 and 2 (the hooks reformat whole files, so a
+   file touched in between drags unrelated formatting into its PR), and only after the other
+   open PRs are merged, or they all conflict. Then add its commit to `.git-blame-ignore-revs`.
+
+**The formatting-only guard** prints `true` only when every changed file equals the
+formatter applied to that file's merge-base version; CI then skips the changed-line steps
+(lint, tests, build always run). Make it hard to fool (a review found each of these):
+- Any added, deleted or renamed file of any type → false (a committed `ruff.pyc` can shadow
+  `python -m ruff`; a `.cjs` file can be a Prettier plugin). Use `--no-renames` and `-z`.
+- Any change to formatter settings or dependencies (`pyproject.toml`, `ruff.toml`,
+  `.prettierrc*`, `.prettierignore`, `.editorconfig`, `package.json`, lockfile) → false.
+- Run Python isolated (`python -I -m ruff`); call Prettier with `plugins: []` and
+  `resolveConfig(file, { editorconfig: true })`; refuse files Prettier ignores or can't parse.
+- Compare bytes, not text with universal newlines (a CR or CRLF change must not pass).
+- CI runs the **base branch's copy** of the guard (`git show origin/$BASE:path/guard >
+  $RUNNER_TEMP/...`), so a PR cannot edit the check it is judged by; if the base has none,
+  write nothing to `GITHUB_OUTPUT` and the gates run. Any error → false.
+- Tests that create temp git repos must ignore the developer's git config
+  (`GIT_CONFIG_GLOBAL=/dev/null`, `GIT_CONFIG_NOSYSTEM=1`), or commit signing breaks them.
+
+**Line-based limits after formatting.** Measure how much longer the same code got (one
+rollout: Python +19% with ruff format, TSX +42% with Prettier because JSX splits over many lines) and
+how many functions cross the limit (TSX: 1 → 10 at 60 lines). Raise the line limit by about
+that factor so the rule stays as strict as before (that rollout: 60 → 75 Python, 60 → 90 TSX);
+say so explicitly to the team, because it is an exception to "limits only tighten". Then add
+**"existing code may not grow"**: an over-limit function or file that already existed at the
+merge base may be edited but not made longer; new, renamed and moved code must be within the
+limit. Match functions by qualified name (Python `ast`; TS AST name, the variable or property
+it is assigned to, or `callee()` it is passed to, nested with `>`), compare **same-name
+functions as a group** (count no higher, paired longest-to-longest no longer), and keep the
+finding when a length can't be read. For JS, lint the base text with
+`eslint --stdin --stdin-filename <file>` to get the base lengths.
+
 ## 5. Layer 3: CI
 
 CI runs the full `quality` on every PR and push to the main branch, and is a
